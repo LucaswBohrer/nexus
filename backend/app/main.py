@@ -4,17 +4,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
 from app.database.database import init_database
 
+<<<<<<< HEAD
 
 init_database()
 
 
+=======
+init_database()
+
+>>>>>>> 02fde370763d1c188b8feb2264e406ee5aafbdac
 app = FastAPI(
     title="NEXUS API",
     description="Intelligent Electrical Monitoring System API",
     version="0.1.0",
 )
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 02fde370763d1c188b8feb2264e406ee5aafbdac
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -23,7 +31,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 02fde370763d1c188b8feb2264e406ee5aafbdac
 app.include_router(router)
 
 
@@ -42,4 +53,8 @@ def health():
     return {
         "status": "healthy",
         "service": "nexus-api",
+<<<<<<< HEAD
     }
+=======
+    }
+>>>>>>> 02fde370763d1c188b8feb2264e406ee5aafbdac
