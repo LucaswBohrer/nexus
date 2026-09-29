@@ -5,9 +5,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
+from app.api.v1 import router as v1_router
 from app.config import settings
 from app.database.database import get_connection, init_database
 from app.services.monitoring import telemetry_service
+from app.services.settings import seed_settings
 
 
 logger = logging.getLogger(__name__)
@@ -21,6 +23,7 @@ async def lifespan(app: FastAPI):
         settings.cors_origins_list,
     )
     init_database()
+    seed_settings()
     await telemetry_service.start()
     logger.info("NEXUS API ready")
     yield
@@ -45,6 +48,7 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(v1_router)
 
 
 @app.get("/")

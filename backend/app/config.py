@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     # on the same LAN can reach the API.
     host: str = "127.0.0.1"
     port: int = 8000
+    # Optional write protection for demos. When set, POST/PUT/PATCH
+    # endpoints require a matching X-API-Key header (401 otherwise).
+    # GETs stay public. Unset -> no enforcement. This is NOT real
+    # authentication: never ship this secret to the frontend.
+    api_key: str | None = None
 
     model_config = {
         "env_prefix": "NEXUS_",

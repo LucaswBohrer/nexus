@@ -11,12 +11,36 @@ from app.database.database import (
 )
 from app.engine.diagnostics import analyze_reading
 from app.engine.simulator import simulator
+from app.services.settings import get_setting
 
 logger = logging.getLogger(__name__)
 
 # How often the telemetry loop prunes rows older than the retention policy.
 # Startup already prunes once; this covers long-running processes.
 PRUNE_INTERVAL_SECONDS = 3600.0
+
+
+def _retention_from_settings() -> dict[str, int] | None:
+    """Build the per-table retention map from settings.
+
+    Returns None when settings are unavailable (very early startup); the
+    pruner then falls back to the compiled-in defaults. Never raises: the
+    telemetry tick must not break because of maintenance.
+    """
+    try:
+        return {
+            "readings": int(get_setting("retention.readings_days")),
+            "events": int(get_setting("retention.events_days")),
+            "diagnostic_episodes": int(
+                get_setting("retention.diagnostic_episodes_days")
+            ),
+            "simulation_sessions": int(
+                get_setting("retention.simulation_sessions_days")
+            ),
+        }
+    except Exception:
+        logger.exception("Failed to read retention settings; using defaults")
+        return None
 
 
 class TelemetryService:
@@ -56,7 +80,7 @@ class TelemetryService:
         if now - self._last_prune_ts < PRUNE_INTERVAL_SECONDS:
             return
         self._last_prune_ts = now
-        pruned = prune_all()
+        pruned = prune_all(_retention_from_settings())
         if any(pruned.values()):
             logger.info(
                 "Pruned old telemetry data: %s",
