@@ -577,6 +577,15 @@ export default function DashboardPage() {
               <CardHeader
                 eyebrow={t.dashboard.last24h}
                 title={t.dashboard.last24h}
+                action={
+                  <Link
+                    href="/analytics"
+                    className="flex min-h-[44px] items-center gap-1 rounded-lg px-2 text-xs font-medium text-[var(--info)]"
+                  >
+                    {t.dashboard.viewAnalytics}
+                    <ArrowRight size={14} />
+                  </Link>
+                }
               />
               {summary && (
                 <div className="mt-4 grid grid-cols-2 gap-3">
