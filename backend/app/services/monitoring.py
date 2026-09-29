@@ -11,6 +11,7 @@ from app.database.database import (
 )
 from app.engine.diagnostics import analyze_reading
 from app.engine.simulator import simulator
+from app.services import simulation as simulation_service
 from app.services.errors import record_error
 from app.services.events import process_tick_events
 from app.services.episodes import process_tick_episode
@@ -61,11 +62,20 @@ class TelemetryService:
 
     def _execute_tick(self) -> tuple[dict[str, Any], dict[str, Any]]:
         tick_start = time.monotonic()
+
+        # NEXUS 2.3: the backend owns simulation timers. Checking expiry
+        # on every tick (including the cold-start tick below) makes
+        # auto-revert work with no frontend connected.
+        simulation_service.check_expiry()
+
         reading = simulator.generate_reading()
         diagnosis = analyze_reading(reading)
         reading["status"] = diagnosis["status"]
 
         save_reading(reading)
+
+        # NEXUS 2.3: track in-memory peak values while a session is active.
+        simulation_service.track_peak(reading)
 
         # NEXUS 2.1: events have a lifecycle (open -> resolved) with
         # deduplication per condition. A sustained anomaly produces ONE

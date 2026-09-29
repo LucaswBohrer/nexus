@@ -7,8 +7,9 @@ from app.database.database import (
     get_recent_events,
     get_recent_readings,
 )
-from app.engine.simulator import simulator
+from app.engine.simulator import SimulationError, simulator
 from app.models.schemas import ElectricalReading
+from app.services import simulation as simulation_service
 from app.services.monitoring import telemetry_service
 
 router = APIRouter(prefix="/api")
@@ -59,23 +60,28 @@ def get_events(
 
 @router.get("/simulation/mode")
 def get_simulation_mode():
+    # NEXUS 2.3: the simulation service owns the scenario; the legacy
+    # endpoint reports its effective mode.
     return {
-        "mode": simulator.mode,
+        "mode": simulation_service.current_mode(),
     }
 
 
 @router.post("/simulation/mode/{mode}", dependencies=[Depends(require_api_key)])
 def set_simulation_mode(mode: str):
+    # NEXUS 2.3: thin wrapper over the new simulation service, equivalent
+    # to start with intensity=100%, no duration and no composer anomalies.
+    # Keeps the legacy 400 contract for unknown modes.
     try:
-        simulator.set_mode(mode)
-    except ValueError as error:
+        simulation_service.start_simulation(mode)
+    except SimulationError as error:
         raise HTTPException(
             status_code=400,
             detail=str(error),
         )
 
     return {
-        "mode": simulator.mode,
+        "mode": simulation_service.current_mode(),
         "status": "simulation mode updated",
     }
 

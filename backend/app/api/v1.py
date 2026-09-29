@@ -17,7 +17,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.api.deps import require_api_key
+from app.engine.simulator import SimulationError
 from app.services import settings as settings_service
+from app.services import simulation as simulation_service
 from app.services.aggregation import (
     AggregationError,
     get_analytics_overview,
@@ -47,6 +49,72 @@ class SettingUpdate(BaseModel):
 
 class EventTransition(BaseModel):
     action: str
+
+
+# ---------------------------------------------------------------------------
+# Simulation control center (NEXUS 2.3)
+# ---------------------------------------------------------------------------
+
+
+class SimulationStart(BaseModel):
+    mode: str
+    intensity: Any = 100.0
+    duration_minutes: Any = None
+    anomalies: Any = None
+
+
+@router.post("/simulation/start", dependencies=[Depends(require_api_key)])
+def simulation_start(body: SimulationStart):
+    """Start a simulation scenario.
+
+    - intensity: 0-200 (percent of the mode's nominal deviation)
+    - duration_minutes: null = indefinite, otherwise a positive number
+      of minutes (fractional values allowed, e.g. 0.05 ~= 3 s)
+    - anomalies: optional composer list of extra anomaly names
+    Invalid payloads return 422.
+    """
+    try:
+        return simulation_service.start_simulation(
+            mode=body.mode,
+            intensity=body.intensity,
+            duration_minutes=body.duration_minutes,
+            anomalies=body.anomalies,
+        )
+    except SimulationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/simulation/status")
+def simulation_status():
+    """Current simulation status. Cheap and safe for polling; the backend
+    is the source of truth (remaining_seconds is computed server-side)."""
+    return simulation_service.get_status()
+
+
+@router.post("/simulation/stop", dependencies=[Depends(require_api_key)])
+def simulation_stop():
+    """Stop the active simulation and revert to normal. Idempotent: when
+    nothing is running it reports stopped=false instead of erroring."""
+    return simulation_service.stop_simulation()
+
+
+@router.post("/simulation/reset", dependencies=[Depends(require_api_key)])
+def simulation_reset():
+    """Reset to baseline: end any active session, clear the timer and any
+    composer anomalies, restore intensity 100%."""
+    return simulation_service.reset_simulation()
+
+
+@router.get("/simulation/sessions")
+def simulation_sessions(
+    limit: int = Query(50, ge=1, le=200),
+    cursor: int | None = Query(None, description="Paging cursor (session id)"),
+):
+    """Simulation session history, newest first, with id-cursor paging."""
+    try:
+        return simulation_service.list_sessions(limit=limit, cursor=cursor)
+    except SimulationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.get("/settings")
