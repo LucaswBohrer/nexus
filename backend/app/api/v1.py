@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -20,6 +20,7 @@ from app.api.deps import require_api_key
 from app.engine.simulator import SimulationError
 from app.services import settings as settings_service
 from app.services import simulation as simulation_service
+from app.services import reports as reports_service
 from app.services.aggregation import (
     AggregationError,
     get_analytics_overview,
@@ -114,6 +115,147 @@ def simulation_sessions(
     try:
         return simulation_service.list_sessions(limit=limit, cursor=cursor)
     except SimulationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Reports (NEXUS 2.3)
+# ---------------------------------------------------------------------------
+
+
+def _csv_response(
+    generator, filename: str
+) -> StreamingResponse:
+    return StreamingResponse(
+        generator,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/reports/daily")
+def report_daily(
+    date: str | None = Query(
+        None, description="Day as YYYY-MM-DD (default: today, UTC)"
+    ),
+    format: str | None = Query(
+        None, description="'json' (default) or 'csv'"
+    ),
+):
+    """Daily report for one UTC day. JSON is the full summary (same
+    numbers as /analytics/overview); CSV streams the day's readings."""
+    try:
+        fmt = reports_service.resolve_format(format)
+        day = (
+            reports_service.parse_date_param(date, "date")
+            if date
+            else datetime.now(timezone.utc).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+        )
+        from_dt, to_dt = day, day + timedelta(days=1)
+        if fmt == "csv":
+            return _csv_response(
+                reports_service.iter_readings_csv(from_dt, to_dt),
+                f"nexus-readings-{day.strftime('%Y-%m-%d')}.csv",
+            )
+        return reports_service.get_report_summary(from_dt, to_dt)
+    except AggregationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/reports/weekly")
+def report_weekly(
+    week: str | None = Query(
+        None, description="ISO week as YYYY-Www (default: current week)"
+    ),
+    format: str | None = Query(
+        None, description="'json' (default) or 'csv'"
+    ),
+):
+    """Weekly report for one ISO week (Monday 00:00 UTC to next Monday).
+    JSON is the full summary; CSV streams the week's readings."""
+    try:
+        fmt = reports_service.resolve_format(format)
+        if week:
+            from_dt, to_dt = reports_service.parse_week_param(week)
+            label = week
+        else:
+            today = datetime.now(timezone.utc).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            from_dt = today - timedelta(days=today.weekday())
+            to_dt = from_dt + timedelta(days=7)
+            label = from_dt.strftime("%G-W%V")
+        if fmt == "csv":
+            return _csv_response(
+                reports_service.iter_readings_csv(from_dt, to_dt),
+                f"nexus-readings-{label}.csv",
+            )
+        return reports_service.get_report_summary(from_dt, to_dt)
+    except AggregationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/reports/events")
+def report_events(
+    from_: str = Query(
+        ..., alias="from", description="ISO-8601 start (naive = UTC)"
+    ),
+    to: str = Query(..., description="ISO-8601 end (naive = UTC)"),
+    format: str | None = Query(
+        None, description="'json' (default) or 'csv'"
+    ),
+):
+    """Events in a period. JSON returns the event list; CSV streams it
+    with timestamp, type, severity, status, message, recommendation,
+    occurrences, opened/closed times, last value and threshold."""
+    try:
+        fmt = reports_service.resolve_format(format)
+        from_dt = parse_bound(from_, "from")
+        to_dt = parse_bound(to, "to")
+        if fmt == "csv":
+            return _csv_response(
+                reports_service.iter_events_csv(from_dt, to_dt),
+                "nexus-events.csv",
+            )
+        events, _ = reports_service.list_events(
+            from_dt=from_dt, to_dt=to_dt, limit=reports_service.MAX_REPORT_EVENTS
+        )
+        return {
+            "period": {
+                "from": from_dt.isoformat(),
+                "to": to_dt.isoformat(),
+            },
+            "events": events,
+        }
+    except AggregationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/reports/summary")
+def report_summary(
+    from_: str = Query(
+        ..., alias="from", description="ISO-8601 start (naive = UTC)"
+    ),
+    to: str = Query(..., description="ISO-8601 end (naive = UTC)"),
+    format: str | None = Query(
+        None, description="'json' (default) or 'csv'"
+    ),
+):
+    """Summary report for a custom period (max 31 days). JSON is the full
+    summary; CSV streams the period's readings."""
+    try:
+        fmt = reports_service.resolve_format(format)
+        from_dt = parse_bound(from_, "from")
+        to_dt = parse_bound(to, "to")
+        if fmt == "csv":
+            return _csv_response(
+                reports_service.iter_readings_csv(from_dt, to_dt),
+                "nexus-readings.csv",
+            )
+        return reports_service.get_report_summary(from_dt, to_dt)
+    except AggregationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
 
