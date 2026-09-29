@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from app.database.database import (
@@ -50,8 +51,14 @@ class TelemetryService:
         self._latest_reading: dict[str, Any] | None = None
         self._latest_diagnosis: dict[str, Any] | None = None
         self._last_prune_ts: float = 0.0
+        self._started_at: datetime | None = None
+        # Tick metrics for /api/health and /api/v1/system/* (NEXUS 2.1).
+        self._tick_count: int = 0
+        self._tick_total_s: float = 0.0
+        self._last_tick_at: datetime | None = None
 
     def _execute_tick(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        tick_start = time.monotonic()
         reading = simulator.generate_reading()
         diagnosis = analyze_reading(reading)
         reading["status"] = diagnosis["status"]
@@ -69,6 +76,10 @@ class TelemetryService:
             "diagnosis": diagnosis,
         }
         self._maybe_prune_old_data()
+
+        self._tick_count += 1
+        self._tick_total_s += time.monotonic() - tick_start
+        self._last_tick_at = datetime.now(timezone.utc)
         return reading, diagnosis
 
     def _maybe_prune_old_data(self) -> None:
@@ -145,6 +156,7 @@ class TelemetryService:
                 }
 
         self._is_running = True
+        self._started_at = datetime.now(timezone.utc)
         self._task = asyncio.create_task(self._run_loop())
 
     async def stop(self):
@@ -162,6 +174,26 @@ class TelemetryService:
                 logger.exception("Error during telemetry worker shutdown: %s", e)
             finally:
                 self._task = None
+
+    def get_uptime_seconds(self) -> float | None:
+        """Seconds since the telemetry service started (None if never)."""
+        if self._started_at is None:
+            return None
+        return (datetime.now(timezone.utc) - self._started_at).total_seconds()
+
+    def get_tick_metrics(self) -> dict[str, Any]:
+        """Internal telemetry metrics for health/system endpoints."""
+        return {
+            "tick_count": self._tick_count,
+            "avg_tick_duration_s": (
+                self._tick_total_s / self._tick_count
+                if self._tick_count
+                else None
+            ),
+            "last_tick_at": (
+                self._last_tick_at.isoformat() if self._last_tick_at else None
+            ),
+        }
 
     def get_latest_reading(self) -> dict[str, Any]:
         if self._latest_reading is not None:
