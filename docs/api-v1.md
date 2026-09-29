@@ -1,4 +1,4 @@
-# NEXUS API v1 (backend 2.1)
+# NEXUS API v1 (backend 2.3)
 
 New functionality lives under `/api/v1/*`. The legacy `/api/*` endpoints
 keep their exact paths, formats and status codes — see
@@ -170,6 +170,85 @@ Response: `{"episodes": [{"id", "started_at", "ended_at", "status",
 "severity", "rules": [...], "peak_values": {"voltage": {"min", "max"}, ...},
 "recommendations": [...]}]}`.
 
+## Simulation (2.3)
+
+The simulation control center. Scenarios describe *deviations from the
+nominal operating point* (220 V, 12 A, 60 Hz, PF 0.93, 42 °C); **intensity**
+0–200 % scales each deviation deterministically (`nominal + (target −
+nominal) × intensity/100`), so 100 % reproduces the historical behaviour,
+0 % collapses to nominal and 200 % doubles the deviation. Physical clamps
+and the `active_power = V·I·PF/1000` chain hold at every intensity.
+
+Modes: `normal`, `high_voltage`, `low_voltage`, `low_power_factor`,
+`high_temperature`, `multiple_anomalies`, plus the 2.3 additions:
+`sensor_failure` (values freeze; the reading is flagged `stale` and the
+diagnostics engine raises a `SENSOR_STALE` warning — no fake-normal
+values), `oscillation` (deterministic 24-tick sine wave on voltage,
+±15 V at 100 %), `overload` (current ≈ 28 A, active power rises
+consistently). The optional `anomalies` composer list adds extra anomaly
+keys on top of the mode (e.g. `high_voltage` + `high_temperature`);
+entries are validated, `sensor_failure` cannot be combined.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/simulation/start` | Start a scenario (API key) |
+| `GET` | `/api/v1/simulation/status` | Live status, cheap for polling |
+| `POST` | `/api/v1/simulation/stop` | Stop, idempotent (API key) |
+| `POST` | `/api/v1/simulation/reset` | Reset to baseline (API key) |
+| `GET` | `/api/v1/simulation/sessions` | Session history, id-cursor paging |
+
+`POST /api/v1/simulation/start` body: `{"mode", "intensity" (0–200,
+default 100), "duration_minutes" (null = indefinite, otherwise a positive
+number of minutes — fractional values allowed), "anomalies": [...]}`.
+Invalid payloads return `422`. Starting `normal` with no anomalies stops
+any active session without creating an audit row; any other start
+supersedes a running session (it is finished first — states never
+overlap).
+
+`GET /api/v1/simulation/status` returns `running`, `session_id`, `mode`,
+`intensity`, `anomalies`, `started_at`, `ends_at` and `remaining_seconds`
+(computed server-side; 0 when idle, null when indefinite).
+
+**Auto-revert:** the backend owns the timer. Every telemetry tick checks
+whether `ends_at` passed; when it does, the session is finished
+(`ended_at` + `peak_values` persisted) and the simulator returns to
+normal — with no frontend connected. One internal `_finish_session()`
+serves stop/reset/auto-revert/supersede, so the logic cannot diverge.
+
+`GET /api/v1/simulation/sessions` params: `limit` (1–200, default 50),
+`cursor` (session id). Each item: `id`, `mode`, `parameters`,
+`started_at`, `ended_at`, `duration_s`, `peak_values` (per-metric
+min/max tracked in memory during the session), `status`
+(`running`/`finished`/`interrupted`, derived — a row with no `ended_at`
+that is not active means the process died mid-session).
+
+## Reports (2.3)
+
+JSON summaries and streaming CSV exports. The JSON summary is built
+directly on `get_analytics_overview()` — reports and analytics share
+the exact same formulas, so they can never disagree. CSVs stream
+row-by-row (`fetchmany` batches) and are never fully built in memory
+(no `Content-Length`; chunked transfer). All ranges are capped at 31
+days (`422` beyond).
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/reports/daily` | One UTC day (`?date=YYYY-MM-DD`, default today) |
+| `GET` | `/api/v1/reports/weekly` | One ISO week (`?week=YYYY-Www`, default current) |
+| `GET` | `/api/v1/reports/events` | Events in `?from=&to=` |
+| `GET` | `/api/v1/reports/summary` | Custom period `?from=&to=` |
+
+All four accept `?format=json` (default) or `?format=csv`. For
+`daily`/`weekly`/`summary`, CSV streams the readings
+(`timestamp,voltage,current,frequency,power_factor,active_power,temperature,status`);
+for `events`, CSV streams the events
+(`timestamp,event_type,severity,status,message,recommendation,occurrences,opened_at,closed_at,last_value,threshold`).
+
+The JSON report shape: `{"period": {"from","to"}, "summary":
+{"readings_count","energy_kwh","power_avg","power_max","voltage_avg","voltage_min","voltage_max","power_factor_avg","temperature_max"},
+"status": {"normal","warning","critical"}, "events": [...],
+"events_truncated": bool, "diagnostic_episodes": [...]}`.
+
 ## Health / system
 
 | Method | Endpoint | Description |
@@ -247,4 +326,6 @@ Notes:
   `low`/`medium`/`high`.
 - `GET /api/health` only gained additive fields.
 - `POST /api/simulation/mode/{mode}` accepts the API-key dependency when
-  `NEXUS_API_KEY` is set; behavior is unchanged otherwise.
+  `NEXUS_API_KEY` is set; behavior is unchanged otherwise. Since 2.3 it is
+  a thin wrapper over `POST /api/v1/simulation/start` (intensity 100 %,
+  no duration, no composer anomalies) and records a session row.

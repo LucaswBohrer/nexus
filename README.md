@@ -20,7 +20,7 @@ Supervising electrical installations (voltage, current, power factor, temperatur
 - Persistent monitoring events
 - SQLite persistence with 30-day retention and automatic pruning
 - Power history chart with live updates
-- 6 configurable simulation scenarios, switchable from the dashboard
+- 9 configurable simulation scenarios, switchable from the dashboard
 - REST API with validated pagination limits
 - Real SQLite health check (`/api/health` → 503 when the database is unreachable)
 - Automatic recovery from a corrupt SQLite file (quarantines it, starts fresh)
@@ -63,6 +63,15 @@ Switch scenarios from the dashboard header (flask icon) or via `POST /api/simula
 | `low_power_factor` | PF ≈ 0.68 — triggers `LOW_POWER_FACTOR` (reactive power issues) |
 | `high_temperature` | Equipment ≈ 78 °C — triggers high-severity `HIGH_TEMPERATURE` events |
 | `multiple_anomalies` | High voltage + low PF + high temperature — `critical` system status |
+| `sensor_failure` | Frozen readings flagged `stale` — raises `SENSOR_STALE` warnings |
+| `oscillation` | Deterministic 24-tick sine wave on voltage (±15 V at 100 %) |
+| `overload` | Current ≈ 28 A — active power rises consistently |
+
+The 2.3 simulation control API (`/api/v1/simulation/*`) adds intensity
+(0–200 %), durations with backend-owned auto-revert, a multi-anomaly
+composer, session history with peak values, and the legacy endpoints
+above keep working as thin wrappers over it. Reports
+(`/api/v1/reports/*`) export JSON summaries and streaming CSVs.
 
 The dashboard reacts within seconds: metric cards change state, the diagnostics panel flags parameters, and events appear in the activity feed.
 
