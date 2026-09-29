@@ -190,6 +190,12 @@ Returns recently detected monitoring events.
 ### Simulation mode
 
 ```http
+GET /api/simulation/mode
+```
+
+Returns the currently active simulator scenario.
+
+```http
 POST /api/simulation/mode/{mode}
 ```
 
