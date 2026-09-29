@@ -183,7 +183,23 @@ Interactive docs: `http://localhost:8000/docs`
 | `GET` | `/api/simulation/mode` | Active simulation scenario |
 | `POST` | `/api/simulation/mode/{mode}` | Switch scenario (400 on unknown mode) |
 
+**API v1** (new in 2.1 — full reference in [`docs/api-v1.md`](docs/api-v1.md)):
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` / `PUT` | `/api/v1/settings[/{key}]` | Persistent system settings (thresholds, retention) |
+| `GET` | `/api/v1/history?metric=&from=&to=&bucket=` | Time-bucketed aggregates (≤31 d, ≤2000 buckets) |
+| `GET` | `/api/v1/stats/summary` | Energy (real deltas), 24h min/max/avg, status counts |
+| `GET` | `/api/v1/events?...` | Filtered events, id-cursor pagination |
+| `PATCH` | `/api/v1/events/{id}` | Acknowledge / resolve (`{"action": ...}`) |
+| `GET` | `/api/v1/system/errors` | Last 100 process errors |
+| `GET` | `/api/v1/system/database` | DB path, size, tables, schema version |
+
 Out-of-range `limit` values return `422`.
+
+Set `NEXUS_API_KEY` to require an `X-API-Key` header on all
+`POST`/`PUT`/`PATCH` endpoints (including the legacy simulation POST);
+`GET`s stay public. See `.env.example`.
 
 ---
 
@@ -196,7 +212,7 @@ cd backend
 .venv/bin/python -m unittest discover -s tests
 ```
 
-Covers: health checks, pagination limits, 30-day retention pruning, corrupt-database recovery, simulation modes, configuration overrides, and the CORS allowlist.
+Covers: health checks, pagination limits, 30-day retention pruning, corrupt-database recovery, simulation modes, configuration overrides, the CORS allowlist, settings persistence/validation, the event lifecycle (deduplication, 5-tick resolution, transitions), history aggregation, energy integration from real deltas, and API-key write protection.
 
 Frontend: `npx tsc --noEmit`, `npm run lint`, `npm run build`. (No test framework is installed on purpose — the dashboard is validated via typecheck, lint and build; see Roadmap.)
 
@@ -221,12 +237,19 @@ nexus/
 │   ├── app/
 │   │   ├── main.py           # FastAPI app, lifespan, CORS, health check
 │   │   ├── config.py         # NEXUS_* environment configuration
-│   │   ├── api/routes.py     # REST endpoints
+│   │   ├── api/routes.py     # REST endpoints (legacy /api/*)
+│   │   ├── api/v1.py         # REST endpoints (new /api/v1/*)
+│   │   ├── api/deps.py       # optional X-API-Key write protection
 │   │   ├── engine/
 │   │   │   ├── simulator.py  # 1 Hz electrical telemetry simulator
 │   │   │   └── diagnostics.py# anomaly detection + recommendations
 │   │   ├── services/monitoring.py  # background telemetry loop
+│   │   ├── services/settings.py    # persistent system settings
+│   │   ├── services/events.py      # event lifecycle + deduplication
+│   │   ├── services/aggregation.py # history buckets + stats
+│   │   ├── services/errors.py      # in-memory error ring buffer
 │   │   ├── database/database.py    # SQLite + retention + corruption recovery
+│   │   ├── database/migrations.py  # versioned schema migrations
 │   │   └── models/schemas.py
 │   ├── tests/                # unittest integration suite
 │   ├── requirements.txt      # pinned versions
