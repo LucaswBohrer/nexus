@@ -82,7 +82,19 @@ export type SimulationMode =
   | "low_voltage"
   | "low_power_factor"
   | "high_temperature"
-  | "multiple_anomalies";
+  | "multiple_anomalies"
+  | "sensor_failure"
+  | "oscillation"
+  | "overload";
+
+/** Anomalias combináveis no composer (sensor_failure não combina — rejeitado pelo backend). */
+export type AnomalyKey =
+  | "high_voltage"
+  | "low_voltage"
+  | "low_power_factor"
+  | "high_temperature"
+  | "overload"
+  | "oscillation";
 
 export interface SimulationModeResponse {
   mode: SimulationMode;
@@ -91,6 +103,81 @@ export interface SimulationModeResponse {
 export interface SetSimulationModeResponse {
   mode: SimulationMode;
   status: string;
+}
+
+/** Status barato para polling — fonte de verdade é o backend. */
+export interface SimulationStatus {
+  running: boolean;
+  session_id: number | null;
+  mode: SimulationMode;
+  intensity: number;
+  anomalies: string[];
+  started_at: string | null;
+  ends_at: string | null;
+  remaining_seconds: number | null;
+}
+
+export interface SimulationStartRequest {
+  mode: SimulationMode;
+  intensity?: number;
+  duration_minutes?: number | null;
+  anomalies?: string[];
+}
+
+export interface SimulationStopResponse extends SimulationStatus {
+  stopped: boolean;
+}
+
+export interface SimulationResetResponse extends SimulationStatus {
+  reset: boolean;
+  finished_session?: SimulationSession | null;
+}
+
+export interface SimulationSessionParameters {
+  mode: SimulationMode;
+  intensity: number;
+  duration_minutes: number | null;
+  anomalies: string[];
+}
+
+export interface SimulationSession {
+  id: number;
+  mode: SimulationMode;
+  parameters: SimulationSessionParameters | null;
+  started_at: string;
+  ended_at: string | null;
+  duration_s: number | null;
+  peak_values: Record<string, { min: number; max: number }> | null;
+  status: "running" | "finished" | "interrupted";
+}
+
+export interface SimulationSessionsResponse {
+  sessions: SimulationSession[];
+  next_cursor: number | null;
+}
+
+export interface ReportPeriod {
+  from: string;
+  to: string;
+}
+
+export interface ReportSummary {
+  period: ReportPeriod;
+  summary: {
+    readings_count: number;
+    energy_kwh: number;
+    power_avg: number | null;
+    power_max: number | null;
+    voltage_avg: number | null;
+    voltage_min: number | null;
+    voltage_max: number | null;
+    power_factor_avg: number | null;
+    temperature_max: number | null;
+  };
+  status: { normal: number; warning: number; critical: number };
+  events: V1Event[];
+  events_truncated: boolean;
+  diagnostic_episodes: DiagnosticEpisode[];
 }
 
 export interface HistoryBucket {

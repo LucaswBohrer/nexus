@@ -1,5 +1,6 @@
 import type {
   AnalyticsOverview,
+  AnomalyKey,
   DiagnosticEpisode,
   DiagnosticResponse,
   ElectricalReading,
@@ -14,10 +15,16 @@ import type {
   HistoryMetric,
   MonitoringEventsResponse,
   NormalizedSeverity,
+  ReportSummary,
   SetSimulationModeResponse,
   SettingsResponse,
   SimulationMode,
   SimulationModeResponse,
+  SimulationResetResponse,
+  SimulationSessionsResponse,
+  SimulationStartRequest,
+  SimulationStatus,
+  SimulationStopResponse,
   StatsSummary,
   SystemDatabaseResponse,
   SystemErrorsResponse,
@@ -186,6 +193,132 @@ export async function setSimulationMode(
 
   const data: SetSimulationModeResponse = await response.json();
   return data.mode;
+}
+
+// ---------------------------------------------------------------------------
+// NEXUS 2.3 — Simulation Control Center API
+// ---------------------------------------------------------------------------
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await apiFetch(apiUrl(path), {
+    method: "POST",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  return response.json();
+}
+
+/** Inicia um cenário de simulação. Erros de validação vêm como 422 com detalhe. */
+export async function startSimulation(
+  body: SimulationStartRequest
+): Promise<SimulationStatus> {
+  return postJson<SimulationStatus>("/api/v1/simulation/start", body);
+}
+
+/** Status atual — barato e seguro para polling (fonte de verdade do countdown). */
+export async function getSimulationStatus(): Promise<SimulationStatus> {
+  const response = await apiFetch(apiUrl("/api/v1/simulation/status"), {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  return response.json();
+}
+
+/** Para a simulação ativa. Idempotente: sem sessão ativa, retorna stopped=false. */
+export async function stopSimulation(): Promise<SimulationStopResponse> {
+  return postJson<SimulationStopResponse>("/api/v1/simulation/stop", {});
+}
+
+/** Volta ao baseline (normal, intensidade 100%, sem timer nem composer). */
+export async function resetSimulation(): Promise<SimulationResetResponse> {
+  return postJson<SimulationResetResponse>("/api/v1/simulation/reset", {});
+}
+
+/** Histórico de sessões, mais recentes primeiro, paginação por cursor de id. */
+export async function getSimulationSessions(
+  limit = 20,
+  cursor?: number | null
+): Promise<SimulationSessionsResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (cursor) {
+    params.set("cursor", String(cursor));
+  }
+  const response = await apiFetch(
+    apiUrl(`/api/v1/simulation/sessions?${params.toString()}`),
+    { cache: "no-store" }
+  );
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  return response.json();
+}
+
+// ---------------------------------------------------------------------------
+// NEXUS 2.3 — Reports API
+// ---------------------------------------------------------------------------
+
+export type ReportKind = "daily" | "weekly" | "events" | "summary";
+
+function reportQuery(kind: ReportKind, params: Record<string, string>): string {
+  const qs = new URLSearchParams(params);
+  return `/api/v1/reports/${kind}?${qs.toString()}`;
+}
+
+/** Resumo JSON do período — usa as mesmas fórmulas do Analytics (mesma fonte de verdade). */
+export async function getReportSummary(
+  kind: "daily" | "weekly" | "summary",
+  params: Record<string, string>
+): Promise<ReportSummary> {
+  const response = await apiFetch(
+    apiUrl(reportQuery(kind, { ...params, format: "json" })),
+    { cache: "no-store" }
+  );
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  return response.json();
+}
+
+/**
+ * Baixa um relatório real como arquivo (CSV ou JSON) via fetch + Blob, para
+ * que o header Bypass-Tunnel-Reminder acompanhe a requisição atrás de túneis.
+ */
+export async function downloadReport(
+  kind: ReportKind,
+  params: Record<string, string>,
+  filename: string
+): Promise<void> {
+  const response = await apiFetch(apiUrl(reportQuery(kind, params)), {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
 // ---------------------------------------------------------------------------
