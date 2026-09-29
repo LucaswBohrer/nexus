@@ -82,7 +82,7 @@ export default function SystemPage() {
             <LoadingState />
           ) : health ? (
             <div className="mt-2 divide-y divide-[var(--border)]">
-              <InfoRow label="Status" value={health.status} />
+              <InfoRow label={t.system.status} value={health.status} />
               <InfoRow label={t.system.version} value={health.version ?? "--"} />
               <InfoRow
                 label={t.system.uptime}

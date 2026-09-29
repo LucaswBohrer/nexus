@@ -93,12 +93,16 @@ export function PreferencesProvider({
 }: {
   children: ReactNode;
 }) {
-  // Lazy initializer: no cliente lê o localStorage já no primeiro render,
-  // sem setState dentro de effect (regra react-hooks/set-state-in-effect).
-  // No SSR usa os padrões.
-  const [preferences, setPreferences] = useState<Preferences>(() =>
-    typeof window === "undefined" ? DEFAULTS : loadPreferences()
-  );
+  // O primeiro render (SSR e hidratação) usa sempre os padrões, para que
+  // o HTML do cliente seja idêntico ao do servidor. As preferências salvas
+  // são aplicadas num effect de montagem — sincronização pontual com um
+  // sistema externo, o caso de uso legítimo para setState em effect.
+  const [preferences, setPreferences] = useState<Preferences>(DEFAULTS);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPreferences(loadPreferences());
+  }, []);
 
   // Sincroniza sistemas externos (DOM + persistência) — uso legítimo
   // de effect.

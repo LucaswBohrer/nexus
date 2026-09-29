@@ -19,166 +19,86 @@ type InputKind = "decimal" | "integer" | "nullable-decimal";
 
 interface FieldDef {
   key: string;
-  label: string;
-  description: string;
   unit?: string;
   kind: InputKind;
-  step?: string;
 }
 
-interface SectionDef {
-  title: string;
-  subtitle: string;
-  fields: FieldDef[];
+interface FieldView extends FieldDef {
+  label: string;
+  description: string;
 }
 
-const SECTIONS: SectionDef[] = [
+// Metadados de apresentação por chave do backend (rótulos e descrições
+// vivem no dicionário i18n; aqui ficam só unidade e tipo de entrada).
+const SECTION_FIELDS: { section: string; hint: string; fields: FieldDef[] }[] = [
   {
-    title: "Limites de alerta",
-    subtitle:
-      "Aplicados pelo backend ao diagnóstico em tempo real. Alterações valem sem reiniciar.",
+    section: "thresholds",
+    hint: "thresholdsHint",
     fields: [
-      {
-        key: "thresholds.voltage_min",
-        label: "Tensão mínima",
-        description: "Abaixo disso o backend gera evento de subtensão.",
-        unit: "V",
-        kind: "decimal",
-        step: "0.1",
-      },
-      {
-        key: "thresholds.voltage_max",
-        label: "Tensão máxima",
-        description: "Acima disso o backend gera evento de sobretensão.",
-        unit: "V",
-        kind: "decimal",
-        step: "0.1",
-      },
-      {
-        key: "thresholds.frequency_min",
-        label: "Frequência mínima",
-        description: "Abaixo disso o backend gera evento de frequência.",
-        unit: "Hz",
-        kind: "decimal",
-        step: "0.1",
-      },
-      {
-        key: "thresholds.frequency_max",
-        label: "Frequência máxima",
-        description: "Acima disso o backend gera evento de frequência.",
-        unit: "Hz",
-        kind: "decimal",
-        step: "0.1",
-      },
-      {
-        key: "thresholds.power_factor_min",
-        label: "Fator de potência mínimo",
-        description: "Abaixo disso o backend gera evento de baixo fator de potência.",
-        kind: "decimal",
-        step: "0.01",
-      },
-      {
-        key: "thresholds.temperature_max",
-        label: "Temperatura máxima",
-        description: "Acima disso o backend gera evento de temperatura.",
-        unit: "°C",
-        kind: "decimal",
-        step: "0.5",
-      },
+      { key: "thresholds.voltage_min", unit: "V", kind: "decimal" },
+      { key: "thresholds.voltage_max", unit: "V", kind: "decimal" },
+      { key: "thresholds.frequency_min", unit: "Hz", kind: "decimal" },
+      { key: "thresholds.frequency_max", unit: "Hz", kind: "decimal" },
+      { key: "thresholds.power_factor_min", kind: "decimal" },
+      { key: "thresholds.temperature_max", unit: "°C", kind: "decimal" },
     ],
   },
   {
-    title: "Energia",
-    subtitle: "Parâmetros usados no cálculo de custo da energia.",
-    fields: [
-      {
-        key: "energy_tariff",
-        label: "Tarifa de energia",
-        description:
-          "Valor do kWh para estimativa de custo. Deixe vazio se desconhecido.",
-        unit: "R$/kWh",
-        kind: "nullable-decimal",
-        step: "0.001",
-      },
-    ],
+    section: "energy",
+    hint: "energyHint",
+    fields: [{ key: "energy_tariff", unit: "R$/kWh", kind: "nullable-decimal" }],
   },
   {
-    title: "Retenção de dados",
-    subtitle: "Por quanto tempo o backend guarda cada tipo de registro.",
+    section: "retention",
+    hint: "retentionHint",
     fields: [
-      {
-        key: "retention.readings_days",
-        label: "Leituras",
-        description: "Dias de telemetria bruta mantidos no banco.",
-        unit: "dias",
-        kind: "integer",
-        step: "1",
-      },
-      {
-        key: "retention.events_days",
-        label: "Eventos",
-        description: "Dias de eventos mantidos no banco.",
-        unit: "dias",
-        kind: "integer",
-        step: "1",
-      },
+      { key: "retention.readings_days", unit: "dias", kind: "integer" },
+      { key: "retention.events_days", unit: "dias", kind: "integer" },
       {
         key: "retention.diagnostic_episodes_days",
-        label: "Episódios diagnósticos",
-        description: "Dias de episódios diagnósticos mantidos no banco.",
         unit: "dias",
         kind: "integer",
-        step: "1",
       },
       {
         key: "retention.simulation_sessions_days",
-        label: "Sessões de simulação",
-        description: "Dias de sessões de simulação mantidos no banco.",
         unit: "dias",
         kind: "integer",
-        step: "1",
       },
     ],
   },
   {
-    title: "Simulação",
-    subtitle: "Valores padrão usados ao iniciar uma simulação.",
+    section: "simulation",
+    hint: "simulationHint",
     fields: [
-      {
-        key: "simulation.default_intensity",
-        label: "Intensidade padrão",
-        description: "Intensidade inicial das sessões de simulação (0–200).",
-        kind: "integer",
-        step: "1",
-      },
+      { key: "simulation.default_intensity", kind: "integer" },
       {
         key: "simulation.default_duration_minutes",
-        label: "Duração padrão",
-        description:
-          "Duração inicial em minutos. Vazio significa sem limite.",
         unit: "min",
         kind: "nullable-decimal",
-        step: "1",
       },
     ],
   },
 ];
 
-function formatValue(value: SettingValue, def: FieldDef): string {
+function formatValue(
+  value: SettingValue,
+  field: FieldDef,
+  notSet: string
+): string {
   if (value === null || value === undefined) {
-    return "Não definido";
+    return notSet;
   }
   const num = Number(value);
   const text = Number.isFinite(num) ? String(num) : String(value);
-  return def.unit ? `${text} ${def.unit}` : text;
+  return field.unit ? `${text} ${field.unit}` : text;
 }
 
 function SettingRow({
-  def,
+  field,
   value,
   onSaved,
 }: {
-  def: FieldDef;
+  field: FieldView;
   value: SettingValue;
   onSaved: (key: string, value: SettingValue) => void;
 }) {
@@ -198,7 +118,7 @@ function SettingRow({
     setError(null);
     let parsed: SettingValue;
     const trimmed = input.trim();
-    if (trimmed === "" && def.kind === "nullable-decimal") {
+    if (trimmed === "" && field.kind === "nullable-decimal") {
       parsed = null;
     } else {
       const num = Number(trimmed.replace(",", "."));
@@ -206,12 +126,12 @@ function SettingRow({
         setError(t.common.invalidValue);
         return;
       }
-      parsed = def.kind === "integer" ? Math.round(num) : num;
+      parsed = field.kind === "integer" ? Math.round(num) : num;
     }
     setSaving(true);
     try {
-      const saved = await updateSetting(def.key, parsed);
-      onSaved(def.key, saved as SettingValue);
+      const saved = await updateSetting(field.key, parsed);
+      onSaved(field.key, saved as SettingValue);
       setEditing(false);
     } catch (err) {
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
@@ -227,8 +147,8 @@ function SettingRow({
   return (
     <div className="flex flex-col gap-3 rounded-xl bg-surface-2 px-4 py-3 sm:flex-row sm:items-center">
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-ink">{def.label}</p>
-        <p className="mt-0.5 text-xs text-muted">{def.description}</p>
+        <p className="text-sm font-medium text-ink">{field.label}</p>
+        <p className="mt-0.5 text-xs text-muted">{field.description}</p>
       </div>
       {editing ? (
         <div className="flex flex-col gap-2 sm:items-end">
@@ -239,7 +159,9 @@ function SettingRow({
               className="field w-36"
               value={input}
               placeholder={
-                def.kind === "nullable-decimal" ? "Vazio = não definido" : ""
+                field.kind === "nullable-decimal"
+                  ? t.settings.emptyMeansUnset
+                  : ""
               }
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -252,8 +174,8 @@ function SettingRow({
               }}
               autoFocus
             />
-            {def.unit && (
-              <span className="text-xs text-faint">{def.unit}</span>
+            {field.unit && (
+              <span className="text-xs text-faint">{field.unit}</span>
             )}
           </div>
           <div className="flex gap-2">
@@ -279,12 +201,12 @@ function SettingRow({
       ) : (
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-ink">
-            {formatValue(value, def)}
+            {formatValue(value, field, t.settings.notSet)}
           </span>
           <button
             type="button"
             onClick={startEditing}
-            aria-label={`Editar: ${def.label}`}
+            aria-label={`${t.common.edit}: ${field.label}`}
             className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl text-muted hover:bg-surface-3"
           >
             <Pencil size={16} />
@@ -345,25 +267,43 @@ export default function SettingsPage() {
         <ErrorBanner message={error} />
       ) : settings ? (
         <>
-          {SECTIONS.map((section) => (
-            <Card key={section.title}>
-              <CardHeader
-                eyebrow={section.title}
-                title={section.title}
-              />
-              <p className="mt-1 text-xs text-faint">{section.subtitle}</p>
-              <div className="mt-4 space-y-2">
-                {section.fields.map((def) => (
-                  <SettingRow
-                    key={def.key}
-                    def={def}
-                    value={settings[def.key]}
-                    onSaved={handleSaved}
-                  />
-                ))}
-              </div>
-            </Card>
-          ))}
+          {SECTION_FIELDS.map((section) => {
+            const labels = t.settings.labels as Record<string, string>;
+            const descriptions = t.settings.descriptions as Record<
+              string,
+              string
+            >;
+            const sections = t.settings.sections as Record<string, string>;
+            const hints = {
+              thresholdsHint: t.settings.thresholdsHint,
+              energyHint: t.settings.energyHint,
+              retentionHint: t.settings.retentionHint,
+              simulationHint: t.settings.simulationHint,
+            } as Record<string, string>;
+            const title = sections[section.section] ?? section.section;
+            return (
+              <Card key={section.section}>
+                <CardHeader eyebrow={title} title={title} />
+                <p className="mt-1 text-xs text-faint">
+                  {hints[section.hint] ?? ""}
+                </p>
+                <div className="mt-4 space-y-2">
+                  {section.fields.map((def) => (
+                    <SettingRow
+                      key={def.key}
+                      field={{
+                        ...def,
+                        label: labels[def.key] ?? def.key,
+                        description: descriptions[def.key] ?? "",
+                      }}
+                      value={settings[def.key]}
+                      onSaved={handleSaved}
+                    />
+                  ))}
+                </div>
+              </Card>
+            );
+          })}
         </>
       ) : (
         <Card>

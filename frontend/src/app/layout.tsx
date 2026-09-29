@@ -32,6 +32,15 @@ export default function RootLayout({
       data-theme="dark"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
+      <head>
+        {/* Aplica tema/densidade salvos antes da primeira pintura,
+            evitando flash do tema padrão. Sem dependências externas. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var p=JSON.parse(localStorage.getItem("nexus:preferences:v1")||"{}");var r=document.documentElement;if(p.theme==="light"||p.theme==="dark")r.dataset.theme=p.theme;if(p.density==="compact"||p.density==="comfortable")r.dataset.density=p.density;if(p.language)r.lang=p.language;}catch(e){}})();`,
+          }}
+        />
+      </head>
       <body className="min-h-full">
         <PreferencesProvider>
           <Shell>{children}</Shell>

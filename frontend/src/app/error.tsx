@@ -3,9 +3,12 @@
 import { useEffect } from "react";
 import { AlertTriangle } from "lucide-react";
 
-// Route-level error boundary for the dashboard. If rendering crashes
-// (e.g. an unexpected API payload shape), show a recoverable fallback
-// instead of a blank page.
+import { ptBR } from "../i18n";
+
+// Route-level error boundary. Se a renderização quebrar (ex.: payload
+// inesperado da API), exibe um fallback recuperável em vez de página em
+// branco. Usa o dicionário diretamente (sem contexto) para funcionar
+// mesmo se o provider tiver falhado.
 export default function Error({
   error,
   retry,
@@ -14,31 +17,30 @@ export default function Error({
   retry: () => void;
 }) {
   useEffect(() => {
-    console.error("Dashboard render error:", error);
+    console.error("Render error:", error);
   }, [error]);
 
+  const t = ptBR;
+
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#090a0d] p-6 text-white">
-      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#111318] p-8 text-center">
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-amber-500/10 text-amber-400">
+    <main className="flex min-h-screen items-center justify-center p-6">
+      <div className="panel w-full max-w-md rounded-2xl p-8 text-center">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--warn)]/10 text-[var(--warn)]">
           <AlertTriangle size={22} />
         </div>
 
-        <h1 className="mt-4 text-lg font-semibold tracking-tight">
-          Something went wrong
+        <h1 className="mt-4 text-lg font-semibold tracking-tight text-ink">
+          {t.error.title}
         </h1>
 
-        <p className="mt-2 text-sm text-gray-400">
-          The dashboard hit an unexpected error. Your monitoring data is safe —
-          try loading it again.
-        </p>
+        <p className="mt-2 text-sm text-muted">{t.error.message}</p>
 
         <button
           type="button"
           onClick={() => retry()}
-          className="mt-6 w-full rounded-xl bg-white px-4 py-2.5 text-sm font-medium text-black transition hover:bg-gray-200"
+          className="mt-6 min-h-[44px] w-full rounded-xl bg-[var(--info)] px-4 py-2.5 text-sm font-medium text-white transition"
         >
-          Try again
+          {t.common.retry}
         </button>
       </div>
     </main>

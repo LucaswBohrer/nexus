@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 import { getCurrentReading } from "../../lib/api";
-import { formatDateTime, formatNumber } from "../../lib/format";
+import { formatDateTime, formatNumber, formatTime } from "../../lib/format";
 import { usePreferences } from "../../lib/preferences";
 import { useNow, usePoll } from "../../lib/usePoll";
 import { Badge, Card, ErrorBanner, LoadingState, PageHeader } from "../../components/ui";
@@ -135,7 +135,7 @@ export default function MonitorPage() {
             <LiveMetric
               icon={Timer}
               label={t.monitor.timestamp}
-              value={formatDateTime(reading.timestamp, preferences).slice(11)}
+              value={formatTime(reading.timestamp, preferences)}
               unit=""
             />
           </div>

@@ -33,6 +33,7 @@ export const ptBR = {
     retry: "Tentar novamente",
     close: "Fechar",
     cancel: "Cancelar",
+    edit: "Editar",
     save: "Salvar",
     saving: "Salvando…",
     search: "Buscar",
@@ -53,6 +54,11 @@ export const ptBR = {
     unauthorized: "Operação não autorizada (verifique a API key).",
     invalidValue: "Valor inválido",
     comingSoon: "Disponível em breve",
+  },
+  error: {
+    title: "Algo deu errado",
+    message:
+      "Ocorreu um erro inesperado ao carregar esta tela. Tente novamente.",
   },
   status: {
     normal: "Normal",
@@ -242,6 +248,7 @@ export const ptBR = {
     noErrors: "Nenhum erro registrado",
     errorTime: "Horário",
     errorMessage: "Mensagem",
+    status: "Status",
   },
   settings: {
     title: "Configurações",
@@ -275,6 +282,31 @@ export const ptBR = {
       energy_tariff: "Tarifa de energia (R$/kWh)",
     },
     notSet: "Não definido",
+    emptyMeansUnset: "Vazio = não definido",
+    energyHint: "Parâmetros usados no cálculo de custo da energia.",
+    simulationHint: "Valores padrão usados ao iniciar uma simulação.",
+    descriptions: {
+      "thresholds.voltage_min": "Abaixo disso o backend gera evento de subtensão.",
+      "thresholds.voltage_max": "Acima disso o backend gera evento de sobretensão.",
+      "thresholds.frequency_min": "Abaixo disso o backend gera evento de frequência.",
+      "thresholds.frequency_max": "Acima disso o backend gera evento de frequência.",
+      "thresholds.power_factor_min":
+        "Abaixo disso o backend gera evento de baixo fator de potência.",
+      "thresholds.temperature_max":
+        "Acima disso o backend gera evento de temperatura.",
+      "retention.readings_days": "Dias de telemetria bruta mantidos no banco.",
+      "retention.events_days": "Dias de eventos mantidos no banco.",
+      "retention.diagnostic_episodes_days":
+        "Dias de episódios diagnósticos mantidos no banco.",
+      "retention.simulation_sessions_days":
+        "Dias de sessões de simulação mantidos no banco.",
+      "simulation.default_intensity":
+        "Intensidade inicial das sessões de simulação (0–200).",
+      "simulation.default_duration_minutes":
+        "Duração inicial em minutos. Vazio significa sem limite.",
+      energy_tariff:
+        "Valor do kWh para estimativa de custo. Deixe vazio se desconhecido.",
+    },
     prefs: {
       theme: "Tema",
       themeDark: "Escuro",

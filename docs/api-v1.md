@@ -162,6 +162,8 @@ Schema changes are versioned with `PRAGMA user_version` in
   legacy naive timestamps interpreted as `America/Sao_Paulo` and converted
   to UTC (legacy events become `resolved` with `occurrences=1`).
 - **v2**: `normal_streak` counter column on `monitoring_events`.
+- **v3**: `normal_streak` counter column on `diagnostic_episodes`
+  (episodes close after K consecutive normal ticks).
 
 ## Data retention
 
