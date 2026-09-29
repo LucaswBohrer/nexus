@@ -40,7 +40,9 @@ receives thousands of raw rows.
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/api/v1/history?metric=&from=&to=&bucket=` | Time-bucketed aggregates |
+| `GET` | `/api/v1/history/extremes?metric=&from=&to=` | Min/max/avg with extreme timestamps |
 | `GET` | `/api/v1/stats/summary` | Consolidated dashboard statistics |
+| `GET` | `/api/v1/analytics/overview?from=&to=` | Period analytics: readings, energy, events, episodes |
 
 `GET /api/v1/history` parameters:
 
@@ -72,6 +74,56 @@ Response:
 Energy is integrated from **real timestamp deltas**
 (`power_kw × delta_s / 3600`), so tick drift cannot skew it. Deltas longer
 than 300 s (restart/outage gaps) are excluded rather than inflated.
+
+`GET /api/v1/history/extremes` takes `metric`, `from`, `to` (same metrics
+and ≤31-day limit as `/history`; violations → `422`) and returns:
+
+```json
+{ "metric": "voltage", "from": "...", "to": "...",
+  "min": { "value": 215.0, "timestamp": "2026-09-29T20:02:00+00:00" },
+  "max": { "value": 230.0, "timestamp": "2026-09-29T20:03:00+00:00" },
+  "avg": 222.4, "count": 5 }
+```
+
+`min`/`max` carry the timestamp of the extreme reading (earliest wins on
+ties). Empty ranges return `null` extremes with `count: 0`.
+
+`GET /api/v1/analytics/overview` takes `from`, `to` (naive = UTC, ≤31
+days, `422` on violations) and aggregates the whole period from the real
+tables — nothing is invented:
+
+```json
+{ "from": "...", "to": "...",
+  "readings_count": 86400,
+  "energy_kwh": 12.34,
+  "per_metric": { "voltage": {"min":..,"max":..,"avg":..}, ... },
+  "events_by_severity": { "info": 0, "warning": 3, "critical": 1 },
+  "events_by_status": { "open": 1, "acknowledged": 1, "resolved": 2 },
+  "episodes": { "total": 2, "open": 1 } }
+```
+
+`energy_kwh` uses the same real-delta integration (300 s cap) as the
+summary endpoint. Event/episode counts are filtered by `opened_at` /
+`started_at` inside the range.
+
+## Real-time stream (SSE)
+
+`GET /api/v1/stream/readings` is a Server-Sent Events stream at ~1 Hz:
+
+- Response headers: `Content-Type: text/event-stream`,
+  `Cache-Control: no-cache`, `X-Accel-Buffering: no`.
+- Each `data:` event is JSON:
+  `{ "reading": {...}, "diagnosis_status": "normal|warning|critical",
+    "severity": "info|warning|critical",
+    "server_ts": "2026-09-29T22:50:01+00:00" }`.
+- A `: heartbeat` comment is sent every 15 s so buffering proxies and
+  tunnels do not stall the connection.
+- The generator samples the shared telemetry state — no per-client
+  buffers, so concurrent clients cannot leak memory. Client disconnects
+  are handled silently (no traceback spam).
+- Public like every other `GET` (`NEXUS_API_KEY` only guards writes).
+  Clients should fall back to polling `/api/monitoring/current` if the
+  stream cannot be established.
 
 ## Events
 

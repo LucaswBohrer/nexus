@@ -183,13 +183,16 @@ Interactive docs: `http://localhost:8000/docs`
 | `GET` | `/api/simulation/mode` | Active simulation scenario |
 | `POST` | `/api/simulation/mode/{mode}` | Switch scenario (400 on unknown mode) |
 
-**API v1** (new in 2.1 — full reference in [`docs/api-v1.md`](docs/api-v1.md)):
+**API v1** (2.1/2.2 — full reference in [`docs/api-v1.md`](docs/api-v1.md)):
 
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` / `PUT` | `/api/v1/settings[/{key}]` | Persistent system settings (thresholds, retention) |
 | `GET` | `/api/v1/history?metric=&from=&to=&bucket=` | Time-bucketed aggregates (≤31 d, ≤2000 buckets) |
+| `GET` | `/api/v1/history/extremes?metric=&from=&to=` | Min/max/avg with extreme timestamps (2.2) |
 | `GET` | `/api/v1/stats/summary` | Energy (real deltas), 24h min/max/avg, status counts |
+| `GET` | `/api/v1/analytics/overview?from=&to=` | Period analytics: readings, energy, events, episodes (2.2) |
+| `GET` | `/api/v1/stream/readings` | SSE live readings ~1 Hz, heartbeat every 15 s (2.2) |
 | `GET` | `/api/v1/events?...` | Filtered events, id-cursor pagination |
 | `PATCH` | `/api/v1/events/{id}` | Acknowledge / resolve (`{"action": ...}`) |
 | `GET` | `/api/v1/system/errors` | Last 100 process errors |
