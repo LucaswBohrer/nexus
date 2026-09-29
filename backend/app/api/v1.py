@@ -4,17 +4,25 @@ New functionality lives here. The legacy /api/* endpoints keep their exact
 contracts and are implemented in app.api.routes.
 """
 
+import asyncio
+import json
+import logging
 import os
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.api.deps import require_api_key
 from app.services import settings as settings_service
 from app.services.aggregation import (
     AggregationError,
+    get_analytics_overview,
     get_history_buckets,
+    get_history_extremes,
     get_stats_summary,
     parse_bound,
 )
@@ -26,6 +34,9 @@ from app.services.events import (
     list_events,
     transition_event,
 )
+from app.services.monitoring import telemetry_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -67,6 +78,83 @@ def update_setting(key: str, body: SettingUpdate):
 
 
 # ---------------------------------------------------------------------------
+# Real-time stream (SSE)
+# ---------------------------------------------------------------------------
+
+# Seconds between `: heartbeat` comments so buffering proxies (nginx,
+# tunnels) do not stall the stream.
+SSE_HEARTBEAT_S = 15.0
+
+# Target event cadence (~1 Hz, matching the telemetry tick).
+SSE_INTERVAL_S = 1.0
+
+
+def _serialize_reading(reading: dict[str, Any]) -> dict[str, Any]:
+    serialized = dict(reading)
+    timestamp = serialized.get("timestamp")
+    if isinstance(timestamp, datetime):
+        serialized["timestamp"] = timestamp.isoformat()
+    return serialized
+
+
+def _latest_stream_payload() -> dict[str, Any] | None:
+    """Sample the shared telemetry state. Returns None before any tick."""
+    try:
+        latest = telemetry_service.get_latest_diagnosis()
+    except RuntimeError:
+        return None
+    diagnosis = latest["diagnosis"]
+    return {
+        "reading": _serialize_reading(latest["reading"]),
+        "diagnosis_status": diagnosis["status"],
+        "severity": diagnosis["severity"],
+        "server_ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/stream/readings")
+def stream_readings():
+    """Server-Sent Events stream of live readings (~1 Hz).
+
+    Each `data:` event is JSON
+    {"reading", "diagnosis_status", "severity", "server_ts"}. A
+    `: heartbeat` comment is sent every 15 s so proxies do not buffer
+    the connection. The generator samples the shared telemetry state —
+    no per-client buffers, so many clients cannot leak memory. Public
+    like every other GET (NEXUS_API_KEY only guards writes).
+    """
+
+    def event_generator():
+        last_heartbeat = time.monotonic()
+        try:
+            while True:
+                payload = _latest_stream_payload()
+                if payload is not None:
+                    yield f"data: {json.dumps(payload)}\n\n"
+                now = time.monotonic()
+                if now - last_heartbeat >= SSE_HEARTBEAT_S:
+                    yield ": heartbeat\n\n"
+                    last_heartbeat = now
+                time.sleep(SSE_INTERVAL_S)
+        except (GeneratorExit, asyncio.CancelledError):
+            # Client disconnected; the generator is torn down silently.
+            return
+        except Exception:
+            logger.exception("SSE stream generator failed")
+            return
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # History / aggregation
 # ---------------------------------------------------------------------------
 
@@ -95,10 +183,52 @@ def get_history(
     return {"buckets": buckets}
 
 
+@router.get("/history/extremes")
+def get_extremes(
+    metric: str = Query(..., description="Metric name, e.g. voltage"),
+    from_: str = Query(
+        ..., alias="from", description="ISO-8601 start (naive = UTC)"
+    ),
+    to: str = Query(..., description="ISO-8601 end (naive = UTC)"),
+):
+    """Min/max/avg of one metric over a range, with extreme timestamps.
+
+    Naive `from`/`to` are interpreted as UTC. Maximum range is 31 days;
+    violations return 422.
+    """
+    try:
+        from_dt = parse_bound(from_, "from")
+        to_dt = parse_bound(to, "to")
+        return get_history_extremes(metric, from_dt, to_dt)
+    except AggregationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 @router.get("/stats/summary")
 def get_summary():
     """Consolidated dashboard statistics, computed from real stored data."""
     return get_stats_summary()
+
+
+@router.get("/analytics/overview")
+def get_analytics(
+    from_: str = Query(
+        ..., alias="from", description="ISO-8601 start (naive = UTC)"
+    ),
+    to: str = Query(..., description="ISO-8601 end (naive = UTC)"),
+):
+    """Period analytics: readings, energy, per-metric stats, event and
+    episode counts. All values come from the real stored tables.
+
+    Naive `from`/`to` are interpreted as UTC. Maximum range is 31 days;
+    violations return 422.
+    """
+    try:
+        from_dt = parse_bound(from_, "from")
+        to_dt = parse_bound(to, "to")
+        return get_analytics_overview(from_dt, to_dt)
+    except AggregationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 # ---------------------------------------------------------------------------

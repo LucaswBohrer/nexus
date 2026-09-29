@@ -81,6 +81,170 @@ def parse_bound(value: str, name: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def validate_range(from_dt: datetime, to_dt: datetime) -> None:
+    """Shared range validation for range-based v1 endpoints (422 on misuse)."""
+    if from_dt >= to_dt:
+        raise AggregationError("'from' must be before 'to'")
+    range_days = (to_dt - from_dt).total_seconds() / 86400
+    if range_days > MAX_HISTORY_RANGE_DAYS:
+        raise AggregationError(
+            f"Range exceeds the {MAX_HISTORY_RANGE_DAYS}-day maximum"
+        )
+
+
+def get_history_extremes(
+    metric: str,
+    from_dt: datetime,
+    to_dt: datetime,
+) -> dict[str, Any]:
+    """Min/max/avg over a range, computed in SQL.
+
+    Returns {"metric", "from", "to", "min": {"value", "timestamp"},
+    "max": {"value", "timestamp"}, "avg", "count"}. When several rows share
+    the extreme value, the earliest timestamp wins. Raises
+    AggregationError for invalid parameters. Empty ranges return None
+    extremes with count 0.
+    """
+    if metric not in METRICS:
+        raise AggregationError(
+            f"Unknown metric '{metric}'. Valid: {sorted(METRICS)}"
+        )
+    validate_range(from_dt, to_dt)
+
+    expression = METRICS[metric]
+    connection = get_connection()
+    try:
+        row = connection.execute(
+            f"""SELECT MIN({expression}), MAX({expression}),
+                       AVG({expression}), COUNT(*)
+                FROM electrical_readings
+                WHERE timestamp >= ? AND timestamp < ?""",
+            (from_dt.isoformat(), to_dt.isoformat()),
+        ).fetchone()
+
+        count = row[3]
+        if not count:
+            min_point = max_point = None
+        else:
+            min_ts = connection.execute(
+                f"""SELECT timestamp FROM electrical_readings
+                    WHERE timestamp >= ? AND timestamp < ?
+                      AND {expression} = ?
+                    ORDER BY timestamp ASC LIMIT 1""",
+                (from_dt.isoformat(), to_dt.isoformat(), row[0]),
+            ).fetchone()
+            max_ts = connection.execute(
+                f"""SELECT timestamp FROM electrical_readings
+                    WHERE timestamp >= ? AND timestamp < ?
+                      AND {expression} = ?
+                    ORDER BY timestamp ASC LIMIT 1""",
+                (from_dt.isoformat(), to_dt.isoformat(), row[1]),
+            ).fetchone()
+            min_point = {"value": row[0], "timestamp": min_ts[0]}
+            max_point = {"value": row[1], "timestamp": max_ts[0]}
+    finally:
+        connection.close()
+
+    return {
+        "metric": metric,
+        "from": from_dt.isoformat(),
+        "to": to_dt.isoformat(),
+        "min": min_point,
+        "max": max_point,
+        "avg": row[2],
+        "count": count,
+    }
+
+
+def get_analytics_overview(
+    from_dt: datetime, to_dt: datetime
+) -> dict[str, Any]:
+    """Period analytics, computed from the real stored tables.
+
+    Returns readings_count, energy_kwh (real timestamp deltas, same
+    300 s cap as stats/summary), per_metric min/max/avg, events_by_severity,
+    events_by_status and episode counts. Everything comes from actual rows;
+    no number is invented.
+    """
+    validate_range(from_dt, to_dt)
+    from_iso, to_iso = from_dt.isoformat(), to_dt.isoformat()
+
+    connection = get_connection()
+    try:
+        readings_count = connection.execute(
+            """SELECT COUNT(*) FROM electrical_readings
+               WHERE timestamp >= ? AND timestamp < ?""",
+            (from_iso, to_iso),
+        ).fetchone()[0]
+
+        energy_rows = connection.execute(
+            """SELECT timestamp, active_power FROM electrical_readings
+               WHERE timestamp >= ? AND timestamp < ?
+               ORDER BY timestamp ASC""",
+            (from_iso, to_iso),
+        ).fetchall()
+
+        per_metric: dict[str, dict[str, float | None]] = {}
+        for metric in SUMMARY_METRICS:
+            row = connection.execute(
+                f"""SELECT MIN({METRICS[metric]}), MAX({METRICS[metric]}),
+                           AVG({METRICS[metric]})
+                    FROM electrical_readings
+                    WHERE timestamp >= ? AND timestamp < ?""",
+                (from_iso, to_iso),
+            ).fetchone()
+            per_metric[metric] = {"min": row[0], "max": row[1], "avg": row[2]}
+
+        severity_rows = connection.execute(
+            """SELECT severity, COUNT(*) FROM monitoring_events
+               WHERE opened_at >= ? AND opened_at < ?
+               GROUP BY severity""",
+            (from_iso, to_iso),
+        ).fetchall()
+        status_rows = connection.execute(
+            """SELECT status, COUNT(*) FROM monitoring_events
+               WHERE opened_at >= ? AND opened_at < ?
+               GROUP BY status""",
+            (from_iso, to_iso),
+        ).fetchall()
+
+        episodes_total = connection.execute(
+            """SELECT COUNT(*) FROM diagnostic_episodes
+               WHERE started_at >= ? AND started_at < ?""",
+            (from_iso, to_iso),
+        ).fetchone()[0]
+        episodes_open = connection.execute(
+            """SELECT COUNT(*) FROM diagnostic_episodes
+               WHERE status = 'open' AND started_at >= ? AND started_at < ?""",
+            (from_iso, to_iso),
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    events_by_severity = {"info": 0, "warning": 0, "critical": 0}
+    for severity, count in severity_rows:
+        if severity in events_by_severity:
+            events_by_severity[severity] = count
+
+    events_by_status = {"open": 0, "acknowledged": 0, "resolved": 0}
+    for status, count in status_rows:
+        if status in events_by_status:
+            events_by_status[status] = count
+
+    return {
+        "from": from_iso,
+        "to": to_iso,
+        "readings_count": readings_count,
+        "energy_kwh": compute_energy_kwh(
+            [(r["timestamp"], r["active_power"]) for r in energy_rows]
+        ),
+        "per_metric": per_metric,
+        "events_by_severity": events_by_severity,
+        "events_by_status": events_by_status,
+        "episodes": {"total": episodes_total, "open": episodes_open},
+    }
+
+
 def get_history_buckets(
     metric: str,
     from_dt: datetime,
