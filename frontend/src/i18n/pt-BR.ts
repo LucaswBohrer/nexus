@@ -183,6 +183,9 @@ export const ptBR = {
     peakValues: "Valores de pico",
     liveNote:
       "Regras calculadas pelo backend a cada leitura — o app apenas exibe.",
+    thresholdsTitle: "Limites em uso",
+    thresholdsHint:
+      "Valores configurados no backend (Configurações → Limites de alerta).",
   },
   analytics: {
     title: "Análises",
