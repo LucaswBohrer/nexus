@@ -1,765 +1,640 @@
 "use client";
 
-import { useEffect, useRef, useState, type ElementType } from "react";
-
-import {
-  getCurrentReading,
-  getEvents,
-  getHistory,
-} from "../lib/api";
-
-import type {
-  ElectricalReading,
-  MonitoringEvent,
-} from "../types/monitoring";
-
+import Link from "next/link";
+import { useMemo } from "react";
+import type { ElementType } from "react";
 import {
   Activity,
-  AlertTriangle,
-  Bell,
+  ArrowRight,
   CheckCircle2,
   Cpu,
   Gauge,
-  Radio,
   Thermometer,
+  TriangleAlert,
   Zap,
 } from "lucide-react";
-
 import {
   Area,
-  AreaChart,
   CartesianGrid,
+  ComposedChart,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
 
-type PowerHistoryPoint = {
-  time: string;
-  power: number;
-};
+import {
+  getDiagnostics,
+  getEventsV1,
+  getHistoryBuckets,
+  getStatsSummary,
+} from "../lib/api";
+import {
+  formatNumber,
+  formatRelative,
+  formatUptime,
+} from "../lib/format";
+import { usePreferences } from "../lib/preferences";
+import { useNow, usePoll } from "../lib/usePoll";
+import type {
+  HistoryBucket,
+  HistoryMetric,
+  StatsSummary,
+  V1Event,
+} from "../types/monitoring";
+import {
+  Badge,
+  Card,
+  CardHeader,
+  ErrorBanner,
+  LoadingState,
+} from "../components/ui";
+
+type MetricKey =
+  | "voltage"
+  | "current"
+  | "active_power"
+  | "apparent_power"
+  | "temperature"
+  | "energy_today";
+
+interface MetricDef {
+  key: MetricKey;
+  label: string;
+  unit: string;
+  digits: number;
+  icon: ElementType;
+  sparkMetric?: HistoryMetric;
+  getValue: (summary: StatsSummary) => number | null;
+  getRange?: (summary: StatsSummary) => { min: number; max: number } | null;
+}
+
+function metricDefs(t: {
+  voltage: string;
+  current: string;
+  activePower: string;
+  apparentPower: string;
+  temperature: string;
+  energyToday: string;
+}): MetricDef[] {
+  return [
+    {
+      key: "voltage",
+      label: t.voltage,
+      unit: "V",
+      digits: 1,
+      icon: Gauge,
+      sparkMetric: "voltage",
+      getValue: (s) => s.current.voltage,
+      getRange: (s) => s.last_24h.voltage ?? null,
+    },
+    {
+      key: "current",
+      label: t.current,
+      unit: "A",
+      digits: 1,
+      icon: Activity,
+      sparkMetric: "current",
+      getValue: (s) => s.current.current,
+      getRange: (s) => s.last_24h.current ?? null,
+    },
+    {
+      key: "active_power",
+      label: t.activePower,
+      unit: "kW",
+      digits: 2,
+      icon: Zap,
+      sparkMetric: "active_power",
+      getValue: (s) => s.current.active_power,
+      getRange: (s) => s.last_24h.active_power ?? null,
+    },
+    {
+      key: "apparent_power",
+      label: t.apparentPower,
+      unit: "kVA",
+      digits: 2,
+      icon: Zap,
+      sparkMetric: "apparent_power",
+      // Aritmética sobre leituras reais (V*I/1000) — não é regra de negócio.
+      getValue: (s) => (s.current.voltage * s.current.current) / 1000,
+    },
+    {
+      key: "temperature",
+      label: t.temperature,
+      unit: "°C",
+      digits: 1,
+      icon: Thermometer,
+      sparkMetric: "temperature",
+      getValue: (s) => s.current.temperature,
+      getRange: (s) => s.last_24h.temperature ?? null,
+    },
+    {
+      key: "energy_today",
+      label: t.energyToday,
+      unit: "kWh",
+      digits: 2,
+      icon: Cpu,
+      getValue: (s) => s.energy_today_kwh,
+    },
+  ];
+}
+
+function Sparkline({ buckets }: { buckets: HistoryBucket[] }) {
+  const data = useMemo(
+    () => buckets.map((b, i) => ({ i, v: b.avg })),
+    [buckets]
+  );
+  if (data.length < 2) {
+    return null;
+  }
+  return (
+    <div className="mt-3 h-10 w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+          <Line
+            type="monotone"
+            dataKey="v"
+            stroke="var(--info)"
+            strokeWidth={1.5}
+            dot={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
 
 function MetricCard({
-  icon: Icon,
-  label,
-  value,
-  unit,
-  status = "live",
+  def,
+  summary,
+  spark,
 }: {
-  icon: ElementType;
-  label: string;
-  value: string;
-  unit: string;
-  status?: "live" | "warning";
+  def: MetricDef;
+  summary: StatsSummary;
+  spark: HistoryBucket[];
 }) {
+  const Icon = def.icon;
+  const value = def.getValue(summary);
+  const range = def.getRange?.(summary) ?? null;
   return (
-    <div className="rounded-2xl border border-white/10 bg-[#111318] p-5 shadow-sm">
+    <Card>
       <div className="flex items-start justify-between">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#1b1e25]">
-          <Icon size={20} className="text-gray-300" />
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-surface-3 text-muted">
+          <Icon size={20} />
         </div>
-
-        <span className="text-lg text-gray-500">•••</span>
       </div>
-
-      <div className="mt-5">
-        <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">
-          {label}
+      <div className="mt-4">
+        <p className="text-xs font-medium uppercase tracking-[0.18em] text-faint">
+          {def.label}
         </p>
-
         <div className="mt-2 flex items-baseline gap-2">
-          <span className="text-2xl font-semibold tracking-tight text-white">
-            {value}
+          <span className="text-2xl font-semibold tracking-tight text-ink">
+            {formatNumber(value, def.digits)}
           </span>
-
-          <span className="text-sm text-gray-500">
-            {unit}
-          </span>
+          <span className="text-sm text-faint">{def.unit}</span>
         </div>
-
-        <div className="mt-4 flex items-center gap-2 text-xs">
-          {status === "live" ? (
-            <>
-              <span className="flex items-center gap-1 text-emerald-400">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                Live
-              </span>
-
-              <span className="text-gray-600">
-                vs last hour
-              </span>
-            </>
-          ) : (
-            <span className="flex items-center gap-1 text-amber-400">
-              <AlertTriangle size={13} />
-              Warning
-            </span>
-          )}
-        </div>
+        {range && (
+          <p className="mt-1 text-[11px] text-faint">
+            24h: {formatNumber(range.min, def.digits)} –{" "}
+            {formatNumber(range.max, def.digits)} {def.unit}
+          </p>
+        )}
+        {def.sparkMetric && <Sparkline buckets={spark} />}
       </div>
-    </div>
+    </Card>
   );
 }
 
-function DiagnosticItem({
-  label,
-  value,
-  unit,
-  normal,
-}: {
-  label: string;
-  value: string;
-  unit: string;
-  normal: boolean;
-}) {
-  return (
-    <div className="flex items-center justify-between rounded-xl border border-white/5 bg-[#111318] px-4 py-3">
-      <div>
-        <p className="text-xs uppercase tracking-wider text-gray-500">
-          {label}
-        </p>
-
-        <p className="mt-1 text-sm font-medium text-white">
-          {value}{" "}
-          <span className="text-gray-500">
-            {unit}
-          </span>
-        </p>
-      </div>
-
-      {normal ? (
-        <div className="flex items-center gap-1.5 text-xs text-emerald-400">
-          <CheckCircle2 size={15} />
-          Normal
-        </div>
-      ) : (
-        <div className="flex items-center gap-1.5 text-xs text-amber-400">
-          <AlertTriangle size={15} />
-          Warning
-        </div>
-      )}
-    </div>
-  );
+async function fetchActiveEvents(): Promise<V1Event[]> {
+  const [open, acknowledged] = await Promise.all([
+    getEventsV1({ status: "open", limit: 5 }),
+    getEventsV1({ status: "acknowledged", limit: 5 }),
+  ]);
+  return [...open.events, ...acknowledged.events]
+    .sort((a, b) => b.id - a.id)
+    .slice(0, 5);
 }
 
-export default function Home() {
-  const [reading, setReading] =
-    useState<ElectricalReading | null>(null);
-
-  const [powerHistory, setPowerHistory] =
-    useState<PowerHistoryPoint[]>([]);
-
-  const [events, setEvents] =
-    useState<MonitoringEvent[]>([]);
-
-  const [loading, setLoading] =
-    useState(true);
-
-  const initialLoadDone =
-    useRef(false);
-
-  const [error, setError] =
-    useState<string | null>(null);
-
-  async function loadReading() {
-    // The first call boots the dashboard (cards show "--" placeholders);
-    // every later call is a background refresh that keeps the last valid
-    // values on screen (no flicker) — state is only replaced on success.
-    const isInitialLoad = !initialLoadDone.current;
-
-    if (isInitialLoad) {
-      setLoading(true);
-    }
-
-    try {
-      const [
-        readingData,
-        eventsData,
-      ] = await Promise.all([
-        getCurrentReading(),
-        getEvents(10),
-      ]);
-
-      setReading(readingData);
-      setEvents(eventsData.events);
-
-      setError(null);
-    } catch (err) {
-      console.error(
-        "Failed to load monitoring data:",
-        err
-      );
-
-      // On a failed poll the previous reading stays rendered; only the
-      // error banner is shown.
-      setError(
-        "Unable to connect to NEXUS API"
-      );
-    } finally {
-      if (isInitialLoad) {
-        initialLoadDone.current = true;
-        setLoading(false);
+async function fetchSparklines(): Promise<Record<string, HistoryBucket[]>> {
+  const to = new Date();
+  const from = new Date(to.getTime() - 3 * 3600_000);
+  const metrics: HistoryMetric[] = [
+    "voltage",
+    "current",
+    "active_power",
+    "apparent_power",
+    "temperature",
+  ];
+  const entries = await Promise.all(
+    metrics.map(async (metric) => {
+      try {
+        const buckets = await getHistoryBuckets({
+          metric,
+          from: from.toISOString(),
+          to: to.toISOString(),
+          bucket: "5m",
+        });
+        return [metric, buckets] as const;
+      } catch {
+        return [metric, []] as const;
       }
+    })
+  );
+  return Object.fromEntries(entries);
+}
+
+export default function DashboardPage() {
+  const { t, preferences } = usePreferences();
+  useNow(5000);
+
+  const pollMs = preferences.pollingIntervalMs;
+
+  const summaryPoll = usePoll(getStatsSummary, pollMs, t.common.connectionError);
+  const diagPoll = usePoll(getDiagnostics, pollMs, t.common.connectionError);
+  const eventsPoll = usePoll(fetchActiveEvents, pollMs, t.common.connectionError);
+  const sparkPoll = usePoll(fetchSparklines, 60000, t.common.connectionError);
+  const trendPoll = usePoll(
+    () =>
+      getHistoryBuckets({
+        metric: "active_power",
+        from: new Date(Date.now() - 3 * 3600_000).toISOString(),
+        to: new Date().toISOString(),
+        bucket: "5m",
+      }),
+    60000,
+    t.common.connectionError
+  );
+
+  const defs = useMemo(() => metricDefs(t.dashboard), [t]);
+  const visibleDefs = useMemo(() => {
+    const favs = preferences.favoriteMetrics;
+    if (!favs || favs.length === 0) {
+      return defs;
     }
-  }
+    return defs.filter((d) => favs.includes(d.key));
+  }, [defs, preferences.favoriteMetrics]);
 
-  async function loadHistory() {
-    try {
-      const history = await getHistory(50);
+  const summary = summaryPoll.data;
+  const diagnosis = diagPoll.data?.diagnosis;
+  const reading = diagPoll.data?.reading ?? summary?.current ?? null;
+  const events = eventsPoll.data ?? [];
+  const trend = useMemo(
+    () => trendPoll.data ?? [],
+    [trendPoll.data]
+  );
 
-      const formattedHistory: PowerHistoryPoint[] =
-        history.map((item) => ({
-          time: new Date(
-            item.timestamp
-          ).toLocaleTimeString("pt-BR", {
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-          }),
-          power: item.active_power,
-        }));
+  const error =
+    summaryPoll.error ?? diagPoll.error ?? eventsPoll.error ?? null;
+  const loading =
+    (summaryPoll.loading || diagPoll.loading) && !summary && !diagnosis;
 
-      setPowerHistory(formattedHistory);
-    } catch (err) {
-      console.error(
-        "Failed to load monitoring history:",
-        err
-      );
+  // Comparação hora atual vs. hora anterior — calculada de verdade a
+  // partir dos buckets (12 buckets de 5 min = 1 h). Só exibe se houver
+  // dados suficientes nos dois períodos.
+  const hourComparison = useMemo(() => {
+    const valid = trend.filter((b) => b.count > 0);
+    if (valid.length < 18) {
+      return null;
     }
-  }
+    const prev = valid.slice(-24, -12);
+    const curr = valid.slice(-12);
+    if (prev.length < 6 || curr.length < 6) {
+      return null;
+    }
+    const avg = (xs: HistoryBucket[]) =>
+      xs.reduce((acc, b) => acc + b.avg, 0) / xs.length;
+    const prevAvg = avg(prev);
+    const currAvg = avg(curr);
+    if (prevAvg === 0) {
+      return null;
+    }
+    return ((currAvg - prevAvg) / prevAvg) * 100;
+  }, [trend]);
 
-  useEffect(() => {
-    // Defer the initial fetch so setState isn't called synchronously
-    // inside the effect body (react-hooks/set-state-in-effect).
-    queueMicrotask(() => {
-      loadReading();
-      loadHistory();
-    });
-
-    const interval = setInterval(() => {
-      loadReading();
-      loadHistory();
-    }, 5000);
-
-    return () => {
-      clearInterval(interval);
-    };
-  }, []);
-
-  const voltage = reading?.voltage;
-  const current = reading?.current;
-  const activePower = reading?.active_power;
-  const powerFactor = reading?.power_factor;
-  const frequency = reading?.frequency;
-  const temperature = reading?.temperature;
-
-  const voltageNormal =
-    voltage !== undefined &&
-    voltage >= 198 &&
-    voltage <= 242;
-
-  const frequencyNormal =
-    frequency !== undefined &&
-    frequency >= 59.5 &&
-    frequency <= 60.5;
-
-  const powerFactorNormal =
-    powerFactor !== undefined &&
-    powerFactor >= 0.8;
-
-  const temperatureNormal =
-    temperature !== undefined &&
-    temperature <= 70;
-
-  const systemNormal =
-    reading?.status === "normal";
+  const status = diagnosis?.status ?? "normal";
+  const uptimeTemplates = {
+    full: t.time.uptimeFormat,
+    short: t.time.uptimeShort,
+    minutes: t.time.uptimeMinutes,
+  };
 
   return (
     <div className="space-y-5">
+      {error && (
+        <ErrorBanner
+          message={error}
+          onRetry={() => {
+            summaryPoll.refresh();
+            diagPoll.refresh();
+            eventsPoll.refresh();
+          }}
+        />
+      )}
 
-
-
-
-            {error && (
-              <div className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm text-amber-400">
-                <AlertTriangle size={16} />
-                {error}
-              </div>
-            )}
-
-            {/* METRICS */}
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-
-              <MetricCard
-                icon={Gauge}
-                label="Voltage"
-                value={
-                  loading ||
-                  voltage === undefined
-                    ? "--"
-                    : voltage.toFixed(1)
-                }
-                unit="V"
-                status={
-                  voltageNormal
-                    ? "live"
-                    : "warning"
-                }
-              />
-
-              <MetricCard
-                icon={Activity}
-                label="Current"
-                value={
-                  loading ||
-                  current === undefined
-                    ? "--"
-                    : current.toFixed(1)
-                }
-                unit="A"
-              />
-
-              <MetricCard
-                icon={Zap}
-                label="Active Power"
-                value={
-                  loading ||
-                  activePower === undefined
-                    ? "--"
-                    : activePower.toFixed(2)
-                }
-                unit="kW"
-              />
-
-              <MetricCard
-                icon={Cpu}
-                label="Power Factor"
-                value={
-                  loading ||
-                  powerFactor === undefined
-                    ? "--"
-                    : powerFactor.toFixed(2)
-                }
-                unit="PF"
-                status={
-                  powerFactorNormal
-                    ? "live"
-                    : "warning"
-                }
-              />
-
-            </div>
-
-            {/* POWER CHART */}
-            <div
-              id="power-chart"
-              className="scroll-mt-6 rounded-2xl border border-white/10 bg-[#111318] p-5 sm:p-6"
+      {loading ? (
+        <LoadingState />
+      ) : (
+        <>
+          {/* STATUS GERAL */}
+          <div className="flex flex-wrap items-center gap-3">
+            <Badge
+              tone={status}
+              icon={status === "normal" ? CheckCircle2 : TriangleAlert}
             >
+              {t.dashboard.overallStatus}:{" "}
+              {t.status[status as "normal" | "warning" | "critical"]}
+            </Badge>
+            {reading && (
+              <span className="text-xs text-faint">
+                {t.common.lastUpdate}:{" "}
+                {formatRelative(reading.timestamp, t.time.justNow, {
+                  secondsAgo: t.time.secondsAgo,
+                  minutesAgo: t.time.minutesAgo,
+                  hoursAgo: t.time.hoursAgo,
+                  daysAgo: t.time.daysAgo,
+                })}
+              </span>
+            )}
+            {summary && (
+              <span className="text-xs text-faint">
+                {t.dashboard.uptime}:{" "}
+                {formatUptime(summary.uptime_s, uptimeTemplates)}
+              </span>
+            )}
+          </div>
 
-              <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">
-                    Energy consumption
-                  </p>
-
-                  <div className="mt-2 flex items-baseline gap-2">
-                    <span className="text-2xl font-semibold">
-                      {activePower !== undefined
-                        ? activePower.toFixed(2)
-                        : "--"}
-                    </span>
-
-                    <span className="text-sm text-gray-500">
-                      kW
-                    </span>
-
-                    <span className="ml-1 text-xs text-emerald-400">
-                      Live
-                    </span>
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-white/5 bg-[#15171c] px-3 py-2 text-xs text-gray-400">
-                  Last 50 readings
-                </div>
-              </div>
-
-              <div className="mt-6 h-[280px] w-full">
-                {powerHistory.length > 0 ? (
-                  <ResponsiveContainer
-                    width="100%"
-                    height="100%"
+          {/* DIAGNÓSTICO REAL */}
+          {diagnosis && diagnosis.anomalies.length > 0 && (
+            <Card>
+              <CardHeader
+                eyebrow={t.dashboard.diagnosis}
+                title={t.dashboard.diagnosis}
+                action={
+                  <Badge tone={diagnosis.severity}>
+                    {t.status[diagnosis.severity]}
+                  </Badge>
+                }
+              />
+              <div className="mt-4 space-y-2">
+                {diagnosis.anomalies.map((anomaly) => (
+                  <div
+                    key={anomaly}
+                    className="flex items-center gap-2 rounded-xl bg-surface-2 px-4 py-2.5 text-sm text-ink"
                   >
-                    <AreaChart
-                      data={powerHistory}
-                      margin={{
-                        top: 10,
-                        right: 5,
-                        left: -20,
-                        bottom: 0,
-                      }}
-                    >
-                      <defs>
-                        <linearGradient
-                          id="powerGradient"
-                          x1="0"
-                          y1="0"
-                          x2="0"
-                          y2="1"
-                        >
-                          <stop
-                            offset="0%"
-                            stopColor="#ffffff"
-                            stopOpacity={0.16}
-                          />
-
-                          <stop
-                            offset="100%"
-                            stopColor="#ffffff"
-                            stopOpacity={0}
-                          />
-                        </linearGradient>
-                      </defs>
-
-                      <CartesianGrid
-                        stroke="#ffffff"
-                        strokeOpacity={0.05}
-                        vertical={false}
-                      />
-
-                      <XAxis
-                        dataKey="time"
-                        tick={{
-                          fill: "#5f6673",
-                          fontSize: 10,
-                        }}
-                        axisLine={false}
-                        tickLine={false}
-                        minTickGap={35}
-                      />
-
-                      <YAxis
-                        tick={{
-                          fill: "#5f6673",
-                          fontSize: 10,
-                        }}
-                        axisLine={false}
-                        tickLine={false}
-                        domain={["auto", "auto"]}
-                      />
-
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "#15171c",
-                          border:
-                            "1px solid rgba(255,255,255,0.08)",
-                          borderRadius: "10px",
-                          color: "#ffffff",
-                        }}
-                        labelStyle={{
-                          color: "#9ca3af",
-                          marginBottom: "4px",
-                        }}
-                        formatter={(value) => [
-                          `${Number(value).toFixed(2)} kW`,
-                          "Active Power",
-                        ]}
-                      />
-
-                      <Area
-                        type="monotone"
-                        dataKey="power"
-                        stroke="#e5e7eb"
-                        strokeWidth={2}
-                        fill="url(#powerGradient)"
-                        dot={false}
-                        activeDot={{
-                          r: 4,
-                          strokeWidth: 0,
-                        }}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="flex h-full items-center justify-center text-sm text-gray-600">
-                    Waiting for monitoring data...
+                    <TriangleAlert
+                      size={15}
+                      className="shrink-0 text-[var(--warn)]"
+                    />
+                    {anomaly}
+                  </div>
+                ))}
+                {diagnosis.recommendations.length > 0 && (
+                  <div className="pt-1">
+                    <p className="mb-1 text-xs font-medium uppercase tracking-wider text-faint">
+                      {t.dashboard.recommendations}
+                    </p>
+                    {diagnosis.recommendations.map((rec, i) => (
+                      <p key={i} className="text-sm text-muted">
+                        • {rec}
+                      </p>
+                    ))}
                   </div>
                 )}
               </div>
+            </Card>
+          )}
+
+          {/* MÉTRICAS */}
+          {summary && (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {visibleDefs.map((def) => (
+                <MetricCard
+                  key={def.key}
+                  def={def}
+                  summary={summary}
+                  spark={
+                    def.sparkMetric
+                      ? (sparkPoll.data?.[def.sparkMetric] ?? [])
+                      : []
+                  }
+                />
+              ))}
             </div>
+          )}
 
-            {/* LOWER GRID */}
-            <div className="grid gap-5 xl:grid-cols-2">
-
-              {/* DIAGNOSTICS */}
-              <div className="rounded-2xl border border-white/10 bg-[#111318] p-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">
-                      Diagnostics
-                    </p>
-
-                    <h3 className="mt-1 text-lg font-semibold">
-                      System parameters
-                    </h3>
-                  </div>
-
-                  <div
-                    className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs ${
-                      systemNormal
-                        ? "bg-emerald-500/10 text-emerald-400"
-                        : "bg-amber-500/10 text-amber-400"
+          {/* TENDÊNCIA AGREGADA */}
+          <Card>
+            <CardHeader
+              eyebrow={t.dashboard.powerTrend}
+              title={`${t.dashboard.activePower} — 3h`}
+              action={
+                hourComparison !== null ? (
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-medium ${
+                      hourComparison >= 0
+                        ? "badge-amber"
+                        : "badge-green"
                     }`}
                   >
-                    {systemNormal ? (
-                      <CheckCircle2 size={14} />
-                    ) : (
-                      <AlertTriangle size={14} />
-                    )}
-
-                    {systemNormal
-                      ? "Normal"
-                      : "Attention"}
-                  </div>
+                    {hourComparison >= 0
+                      ? t.dashboard.increase.replace(
+                          "{n}",
+                          formatNumber(hourComparison, 1)
+                        )
+                      : t.dashboard.decrease.replace(
+                          "{n}",
+                          formatNumber(Math.abs(hourComparison), 1)
+                        )}
+                  </span>
+                ) : undefined
+              }
+            />
+            <div className="mt-4 h-[260px] w-full">
+              {trend.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart
+                    data={trend.map((b) => ({
+                      label: new Date(b.t).toLocaleTimeString("pt-BR", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      }),
+                      avg: b.avg,
+                      range: [b.min, b.max],
+                    }))}
+                    margin={{ top: 10, right: 5, left: -15, bottom: 0 }}
+                  >
+                    <CartesianGrid stroke="var(--border)" vertical={false} />
+                    <XAxis
+                      dataKey="label"
+                      tick={{ fill: "var(--faint)", fontSize: 10 }}
+                      axisLine={false}
+                      tickLine={false}
+                      minTickGap={40}
+                    />
+                    <YAxis
+                      tick={{ fill: "var(--faint)", fontSize: 10 }}
+                      axisLine={false}
+                      tickLine={false}
+                      domain={["auto", "auto"]}
+                      tickFormatter={(v: number) => formatNumber(v, 1)}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "var(--surface)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "10px",
+                        color: "var(--text)",
+                      }}
+                      labelStyle={{ color: "var(--muted)", marginBottom: 4 }}
+                      formatter={(value, name) => [
+                        `${formatNumber(Number(value), 2)} kW`,
+                        name === "avg" ? t.dashboard.avg : t.dashboard.max,
+                      ]}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="range"
+                      stroke="none"
+                      fill="var(--info)"
+                      fillOpacity={0.15}
+                      name="range"
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="avg"
+                      stroke="var(--info)"
+                      strokeWidth={2}
+                      dot={false}
+                      name="avg"
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-faint">
+                  {t.common.waitingData}
                 </div>
-
-                <div className="mt-5 space-y-2">
-                  <DiagnosticItem
-                    label="Voltage"
-                    value={
-                      voltage !== undefined
-                        ? voltage.toFixed(1)
-                        : "--"
-                    }
-                    unit="V"
-                    normal={voltageNormal}
-                  />
-
-                  <DiagnosticItem
-                    label="Frequency"
-                    value={
-                      frequency !== undefined
-                        ? frequency.toFixed(2)
-                        : "--"
-                    }
-                    unit="Hz"
-                    normal={frequencyNormal}
-                  />
-
-                  <DiagnosticItem
-                    label="Power factor"
-                    value={
-                      powerFactor !== undefined
-                        ? powerFactor.toFixed(2)
-                        : "--"
-                    }
-                    unit="PF"
-                    normal={powerFactorNormal}
-                  />
-
-                  <DiagnosticItem
-                    label="Temperature"
-                    value={
-                      temperature !== undefined
-                        ? temperature.toFixed(1)
-                        : "--"
-                    }
-                    unit="°C"
-                    normal={temperatureNormal}
-                  />
-                </div>
-              </div>
-
-              {/* SYSTEM INFO */}
-              <div className="rounded-2xl border border-white/10 bg-[#111318] p-5">
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">
-                    Monitoring status
-                  </p>
-
-                  <h3 className="mt-1 text-lg font-semibold">
-                    Real-time telemetry
-                  </h3>
-                </div>
-
-                <div className="mt-5 grid gap-3 sm:grid-cols-2">
-
-                  <div className="rounded-xl border border-white/5 bg-[#0d0f13] p-4">
-                    <div className="flex items-center gap-2 text-gray-400">
-                      <Radio size={16} />
-
-                      <span className="text-xs">
-                        API connection
-                      </span>
-                    </div>
-
-                    <p
-                      className={`mt-3 text-sm font-medium ${
-                        error
-                          ? "text-amber-400"
-                          : "text-emerald-400"
-                      }`}
-                    >
-                      {error
-                        ? "Disconnected"
-                        : "Connected"}
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl border border-white/5 bg-[#0d0f13] p-4">
-                    <div className="flex items-center gap-2 text-gray-400">
-                      <Activity size={16} />
-
-                      <span className="text-xs">
-                        Sampling
-                      </span>
-                    </div>
-
-                    <p className="mt-3 text-sm font-medium text-white">
-                      Every second
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl border border-white/5 bg-[#0d0f13] p-4">
-                    <div className="flex items-center gap-2 text-gray-400">
-                      <Thermometer size={16} />
-
-                      <span className="text-xs">
-                        Temperature
-                      </span>
-                    </div>
-
-                    <p className="mt-3 text-sm font-medium text-white">
-                      {temperature !== undefined
-                        ? `${temperature.toFixed(1)} °C`
-                        : "--"}
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl border border-white/5 bg-[#0d0f13] p-4">
-                    <div className="flex items-center gap-2 text-gray-400">
-                      <DatabaseIcon />
-
-                      <span className="text-xs">
-                        Stored readings
-                      </span>
-                    </div>
-
-                    <p className="mt-3 text-sm font-medium text-white">
-                      {powerHistory.length}
-                    </p>
-                  </div>
-
-                </div>
-              </div>
-
+              )}
             </div>
+          </Card>
 
-            {/* RECENT EVENTS */}
-            <div
-              id="events"
-              className="scroll-mt-6 rounded-2xl border border-white/10 bg-[#111318] p-5"
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">
-                    Recent events
-                  </p>
-
-                  <h3 className="mt-1 text-lg font-semibold">
-                    Monitoring activity
-                  </h3>
-                </div>
-
-                <Bell
-                  size={18}
-                  className="text-gray-500"
-                />
-              </div>
-
-              <div className="mt-5 divide-y divide-white/[0.05]">
+          {/* EVENTOS ATIVOS + CONTAGENS */}
+          <div className="grid gap-5 xl:grid-cols-2">
+            <Card>
+              <CardHeader
+                eyebrow={t.dashboard.activeEvents}
+                title={t.dashboard.activeEvents}
+                action={
+                  <Link
+                    href="/events"
+                    className="flex min-h-[44px] items-center gap-1 rounded-lg px-2 text-xs font-medium text-[var(--info)]"
+                  >
+                    {t.common.viewAll}
+                    <ArrowRight size={14} />
+                  </Link>
+                }
+              />
+              <div className="mt-4 space-y-2">
                 {events.length === 0 ? (
-                  <div className="py-6 text-center text-xs text-zinc-600">
-                    No events recorded
-                  </div>
+                  <p className="py-4 text-center text-sm text-faint">
+                    {t.dashboard.noActiveEvents}
+                  </p>
                 ) : (
                   events.map((event) => (
-                    <div
+                    <Link
                       key={event.id}
-                      className="flex items-center gap-4 py-4 first:pt-0 last:pb-0"
+                      href="/events"
+                      className="flex items-center gap-3 rounded-xl bg-surface-2 px-4 py-3"
                     >
-                      <span className="w-10 shrink-0 text-[11px] font-medium text-zinc-600">
-                        {new Date(
-                          event.timestamp
-                        ).toLocaleTimeString(
-                          "pt-BR",
-                          {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          }
-                        )}
-                      </span>
-
-                      <div
-                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
-                          event.severity === "high"
-                            ? "bg-red-400/10 text-red-400"
-                            : event.severity === "medium"
-                              ? "bg-amber-400/10 text-amber-400"
-                              : "bg-emerald-400/10 text-emerald-400"
+                      <TriangleAlert
+                        size={16}
+                        className={`shrink-0 ${
+                          event.severity === "critical"
+                            ? "text-[var(--bad)]"
+                            : "text-[var(--warn)]"
                         }`}
-                      >
-                        {event.severity === "high" ? (
-                          <AlertTriangle size={15} />
-                        ) : event.severity === "medium" ? (
-                          <AlertTriangle size={15} />
-                        ) : (
-                          <CheckCircle2 size={15} />
-                        )}
-                      </div>
-
-                      <div className="min-w-0">
-                        <p className="truncate text-xs font-medium text-zinc-300">
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-ink">
                           {event.event_type}
                         </p>
-
-                        <p className="mt-0.5 truncate text-[11px] text-zinc-600">
+                        <p className="truncate text-xs text-muted">
                           {event.message}
                         </p>
                       </div>
-                    </div>
+                      <span className="shrink-0 text-[11px] text-faint">
+                        ×{event.occurrences}
+                      </span>
+                    </Link>
                   ))
                 )}
               </div>
-            </div>
+            </Card>
 
+            <Card>
+              <CardHeader
+                eyebrow={t.dashboard.last24h}
+                title={t.dashboard.last24h}
+              />
+              {summary && (
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <div className="rounded-xl bg-surface-2 px-4 py-3">
+                    <p className="text-[11px] uppercase tracking-wider text-faint">
+                      {t.dashboard.storedReadings}
+                    </p>
+                    <p className="mt-1 text-lg font-semibold text-ink">
+                      {formatNumber(summary.readings_count, 0)}
+                    </p>
+                  </div>
+                  <div className="rounded-xl bg-surface-2 px-4 py-3">
+                    <p className="text-[11px] uppercase tracking-wider text-faint">
+                      {t.dashboard.energyToday}
+                    </p>
+                    <p className="mt-1 text-lg font-semibold text-ink">
+                      {formatNumber(summary.energy_today_kwh, 2)}{" "}
+                      <span className="text-xs font-normal text-faint">
+                        kWh
+                      </span>
+                    </p>
+                  </div>
+                  {Object.entries(summary.status_counts_24h).map(
+                    ([statusKey, count]) => (
+                      <div
+                        key={statusKey}
+                        className="rounded-xl bg-surface-2 px-4 py-3"
+                      >
+                        <p className="text-[11px] uppercase tracking-wider text-faint">
+                          {t.status[statusKey as "normal" | "warning" | "critical"] ??
+                            statusKey}
+                        </p>
+                        <p className="mt-1 text-lg font-semibold text-ink">
+                          {formatNumber(count, 0)}
+                        </p>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+            </Card>
+          </div>
+
+          {diagnosis && diagnosis.anomalies.length === 0 && (
+            <Card>
+              <div className="flex items-center gap-3">
+                <CheckCircle2
+                  size={20}
+                  className="shrink-0 text-[var(--ok)]"
+                />
+                <p className="text-sm text-muted">
+                  {t.dashboard.noAnomalies}
+                </p>
+              </div>
+            </Card>
+          )}
+        </>
+      )}
     </div>
-  );
-}
-
-function DatabaseIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <ellipse
-        cx="12"
-        cy="5"
-        rx="8"
-        ry="3"
-      />
-
-      <path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
-
-      <path d="M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7" />
-    </svg>
   );
 }
