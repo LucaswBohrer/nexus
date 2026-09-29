@@ -3,42 +3,23 @@ from fastapi import APIRouter, HTTPException
 from app.database.database import (
     get_recent_events,
     get_recent_readings,
-    save_event,
-    save_reading,
 )
-from app.engine.diagnostics import analyze_reading
 from app.engine.simulator import simulator
 from app.models.schemas import ElectricalReading
+from app.services.monitoring import telemetry_service
 
 router = APIRouter(prefix="/api")
 
 
-def process_reading():
-    reading = simulator.generate_reading()
-    diagnosis = analyze_reading(reading)
-    reading["status"] = diagnosis["status"]
-
-    save_reading(reading)
-
-    for event in diagnosis["events"]:
-        save_event(event)
-
-    return reading, diagnosis
-
-
 @router.get("/monitoring/current", response_model=ElectricalReading)
 def get_current_reading():
-    reading, _ = process_reading()
-    return reading
+    return telemetry_service.get_latest_reading()
 
 
 @router.get("/monitoring/diagnostics")
 def get_diagnostics():
-    reading, diagnosis = process_reading()
-    return {
-        "reading": reading,
-        "diagnosis": diagnosis,
-    }
+    return telemetry_service.get_latest_diagnosis()
+
 
 
 @router.get("/monitoring/history")

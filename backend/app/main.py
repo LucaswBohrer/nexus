@@ -1,16 +1,28 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.database.database import init_database
+from app.services.monitoring import telemetry_service
 
-init_database()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_database()
+    await telemetry_service.start()
+    yield
+    await telemetry_service.stop()
+
 
 app = FastAPI(
     title="NEXUS API",
     description="Intelligent Electrical Monitoring System API",
     version="0.1.0",
+    lifespan=lifespan,
 )
+
 
 app.add_middleware(
     CORSMiddleware,

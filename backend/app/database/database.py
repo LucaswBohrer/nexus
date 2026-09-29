@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -6,13 +7,16 @@ DB_PATH = BASE_DIR / "nexus.db"
 
 
 def get_connection():
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(DB_PATH, timeout=10.0)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout = 5000;")
     return connection
 
 
 def init_database():
     connection = get_connection()
+    connection.execute("PRAGMA journal_mode = WAL;")
+    connection.execute("PRAGMA synchronous = NORMAL;")
 
     connection.execute("""
         CREATE TABLE IF NOT EXISTS electrical_readings (
@@ -41,6 +45,31 @@ def init_database():
 
     connection.commit()
     connection.close()
+
+
+def get_latest_reading_from_db() -> dict | None:
+    connection = get_connection()
+    row = connection.execute(
+        """
+        SELECT id, timestamp, voltage, current, frequency,
+               power_factor, active_power, temperature, status
+        FROM electrical_readings
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    connection.close()
+
+    if row:
+        data = dict(row)
+        if isinstance(data["timestamp"], str):
+            try:
+                data["timestamp"] = datetime.fromisoformat(data["timestamp"])
+            except ValueError:
+                pass
+        return data
+    return None
+
 
 
 def save_reading(reading: dict):
