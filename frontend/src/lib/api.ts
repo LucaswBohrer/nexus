@@ -1,6 +1,5 @@
 import type {
   AnalyticsOverview,
-  AnomalyKey,
   DiagnosticEpisode,
   DiagnosticResponse,
   ElectricalReading,
