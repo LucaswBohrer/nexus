@@ -34,8 +34,17 @@ function getApiBaseUrl(): string {
 const REQUEST_TIMEOUT_MS = 10_000;
 
 function apiFetch(input: RequestInfo | URL, init?: RequestInit) {
+  const headers = new Headers(init?.headers);
+  // The public demo URL runs behind a localtunnel tunnel, whose
+  // "Tunnel website ahead!" interstitial page blocks the dashboard's
+  // background fetch() calls even after the page itself was allowed
+  // through in the browser. This is the programmatic bypass documented
+  // on the interstitial page itself ("set a bypass-tunnel-reminder
+  // request header with any value"); top-level page loads are unaffected.
+  headers.set("Bypass-Tunnel-Reminder", "1");
   return fetch(input, {
     ...init,
+    headers,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 }
