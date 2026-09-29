@@ -178,10 +178,10 @@ def start_simulation(
     """Start a simulation scenario. Validates everything; raises
     SimulationError on invalid input.
 
-    Starting mode="normal" stops any active session and restores the
-    baseline without creating an audit row (there is nothing anomalous
-    to audit). Any other start supersedes a running session: the old one
-    is finished first so states can never overlap.
+    Starting mode="normal" with no anomalies stops any active session and
+    restores the baseline without creating an audit row (there is nothing
+    anomalous to audit). Any other start supersedes a running session:
+    the old one is finished first so states can never overlap.
     """
     if mode not in VALID_MODES:
         raise SimulationError(
@@ -195,7 +195,7 @@ def start_simulation(
     now = _now()
     with _LOCK:
         _finish_session_locked(now)
-        if mode == "normal":
+        if not scenario["effective_anomalies"]:
             return idle_status()
         ends_at = (
             now + timedelta(minutes=duration) if duration is not None else None
