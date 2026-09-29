@@ -13,12 +13,13 @@ import {
   YAxis,
 } from "recharts";
 
-import { getHistoryBuckets } from "../../lib/api";
-import { formatNumber } from "../../lib/format";
+import { getHistoryBuckets, getHistoryExtremes } from "../../lib/api";
+import { formatDateTime, formatNumber } from "../../lib/format";
 import { usePreferences } from "../../lib/preferences";
 import type {
   HistoryBucket,
   HistoryBucketSize,
+  HistoryExtremesResponse,
   HistoryMetric,
 } from "../../types/monitoring";
 import {
@@ -31,9 +32,10 @@ import {
 } from "../../components/ui";
 
 const RANGES = ["1h", "6h", "24h", "7d", "31d"] as const;
-type Range = (typeof RANGES)[number];
+type PresetRange = (typeof RANGES)[number];
+type Range = PresetRange | "custom";
 
-const RANGE_MS: Record<Range, number> = {
+const RANGE_MS: Record<PresetRange, number> = {
   "1h": 3600_000,
   "6h": 6 * 3600_000,
   "24h": 24 * 3600_000,
@@ -41,7 +43,7 @@ const RANGE_MS: Record<Range, number> = {
   "31d": 31 * 24 * 3600_000,
 };
 
-const AUTO_BUCKET: Record<Range, HistoryBucketSize> = {
+const AUTO_BUCKET: Record<PresetRange, HistoryBucketSize> = {
   "1h": "1m",
   "6h": "5m",
   "24h": "15m",
@@ -84,6 +86,31 @@ function metricLabel(metric: HistoryMetric, t: Record<string, string>): string {
   return map[metric];
 }
 
+/** Limites do período; null = personalizado ainda não preenchido/válido. */
+function resolveBounds(
+  range: Range,
+  customFrom: string,
+  customTo: string
+): { from: Date; to: Date } | null {
+  if (range === "custom") {
+    if (!customFrom || !customTo) {
+      return null;
+    }
+    const from = new Date(customFrom);
+    const to = new Date(customTo);
+    if (
+      Number.isNaN(from.getTime()) ||
+      Number.isNaN(to.getTime()) ||
+      from >= to
+    ) {
+      return null;
+    }
+    return { from, to };
+  }
+  const to = new Date();
+  return { from: new Date(to.getTime() - RANGE_MS[range]), to };
+}
+
 type ChartPoint = {
   t: string;
   label: string;
@@ -102,9 +129,13 @@ export default function HistoryPage() {
     (preferences.defaultRange as Range) ?? "24h"
   );
   const [bucket, setBucket] = useState<HistoryBucketSize>(
-    AUTO_BUCKET[(preferences.defaultRange as Range) ?? "24h"]
+    AUTO_BUCKET[(preferences.defaultRange as PresetRange) ?? "24h"]
   );
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
   const [buckets, setBuckets] = useState<HistoryBucket[] | null>(null);
+  const [extremes, setExtremes] =
+    useState<HistoryExtremesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -112,28 +143,51 @@ export default function HistoryPage() {
   // depois no seletor de agregação).
   function handleRangeChange(next: Range) {
     setRange(next);
-    setBucket(AUTO_BUCKET[next]);
+    if (next !== "custom") {
+      setBucket(AUTO_BUCKET[next]);
+    }
   }
+
+  // Limites do período atual; null = personalizado ainda não preenchido.
+  const bounds = resolveBounds(range, customFrom, customTo);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      const b = resolveBounds(range, customFrom, customTo);
+      if (!b) {
+        if (!cancelled) {
+          setBuckets([]);
+          setExtremes(null);
+          setError(null);
+          setLoading(false);
+        }
+        return;
+      }
       setLoading(true);
       setError(null);
       try {
-        const to = new Date();
-        const from = new Date(to.getTime() - RANGE_MS[range]);
-        const data = await getHistoryBuckets({
-          metric,
-          from: from.toISOString(),
-          to: to.toISOString(),
-          bucket,
-        });
+        const [bucketData, extremesData] = await Promise.all([
+          getHistoryBuckets({
+            metric,
+            from: b.from.toISOString(),
+            to: b.to.toISOString(),
+            bucket,
+          }),
+          getHistoryExtremes({
+            metric,
+            from: b.from.toISOString(),
+            to: b.to.toISOString(),
+          }),
+        ]);
         if (!cancelled) {
-          setBuckets(data);
+          setBuckets(bucketData);
+          setExtremes(extremesData);
         }
       } catch (err) {
         if (!cancelled) {
+          // Mensagens 422 do backend (ex.: período > 31 dias, buckets >
+          // 2000) chegam aqui com o detalhe original — exibidas como são.
           setError(
             err instanceof Error ? err.message : t.common.connectionError
           );
@@ -148,30 +202,30 @@ export default function HistoryPage() {
     return () => {
       cancelled = true;
     };
-  }, [metric, range, bucket, t]);
+  }, [metric, range, bucket, customFrom, customTo, t]);
 
-  const points: ChartPoint[] = useMemo(
-    () =>
-      (buckets ?? []).map((b) => ({
-        t: b.t,
-        label:
-          range === "7d" || range === "31d"
-            ? new Date(b.t).toLocaleDateString("pt-BR", {
-                day: "2-digit",
-                month: "2-digit",
-              })
-            : new Date(b.t).toLocaleTimeString("pt-BR", {
-                hour: "2-digit",
-                minute: "2-digit",
-              }),
-        min: b.min,
-        max: b.max,
-        avg: b.avg,
-        count: b.count,
-        range: [b.min, b.max],
-      })),
-    [buckets, range]
-  );
+  const points: ChartPoint[] = useMemo(() => {
+    const spanMs =
+      bounds !== null ? bounds.to.getTime() - bounds.from.getTime() : 0;
+    const showDate = spanMs > 2 * 24 * 3600_000;
+    return (buckets ?? []).map((b) => ({
+      t: b.t,
+      label: showDate
+        ? new Date(b.t).toLocaleDateString("pt-BR", {
+            day: "2-digit",
+            month: "2-digit",
+          })
+        : new Date(b.t).toLocaleTimeString("pt-BR", {
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+      min: b.min,
+      max: b.max,
+      avg: b.avg,
+      count: b.count,
+      range: [b.min, b.max],
+    }));
+  }, [buckets, bounds]);
 
   const unit = METRIC_UNITS[metric];
 
@@ -212,6 +266,7 @@ export default function HistoryPage() {
                   {t.history.ranges[r]}
                 </option>
               ))}
+              <option value="custom">{t.history.customRange}</option>
             </select>
           </label>
 
@@ -232,6 +287,32 @@ export default function HistoryPage() {
             </select>
           </label>
         </div>
+      {range === "custom" && (
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium uppercase tracking-wider text-faint">
+              {t.common.from}
+            </span>
+            <input
+              type="datetime-local"
+              className="field"
+              value={customFrom}
+              onChange={(e) => setCustomFrom(e.target.value)}
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium uppercase tracking-wider text-faint">
+              {t.common.to}
+            </span>
+            <input
+              type="datetime-local"
+              className="field"
+              value={customTo}
+              onChange={(e) => setCustomTo(e.target.value)}
+            />
+          </label>
+        </div>
+      )}
       </Card>
 
       {error && <ErrorBanner message={error} />}
@@ -323,6 +404,91 @@ export default function HistoryPage() {
             </ResponsiveContainer>
           )}
         </div>
+      </Card>
+
+      <Card>
+        <CardHeader
+          eyebrow={t.history.extremes}
+          title={`${metricLabel(metric, t.dashboard)}${unit ? ` (${unit})` : ""} — ${t.history.extremes}`}
+        />
+        {loading ? (
+          <LoadingState />
+        ) : extremes && extremes.count > 0 ? (
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl bg-surface-2 px-4 py-3">
+              <p className="text-xs font-medium uppercase tracking-[0.14em] text-faint">
+                {t.history.extremesMin}
+              </p>
+              <p className="mt-1 text-2xl font-semibold tracking-tight text-ink">
+                {extremes.min
+                  ? formatNumber(extremes.min.value, 2)
+                  : "--"}
+                {unit && (
+                  <span className="text-sm font-normal text-faint">
+                    {" "}
+                    {unit}
+                  </span>
+                )}
+              </p>
+              {extremes.min && (
+                <p className="mt-1 text-xs text-faint">
+                  {t.history.recordedAt}{" "}
+                  {formatDateTime(extremes.min.timestamp, preferences)}
+                </p>
+              )}
+            </div>
+            <div className="rounded-xl bg-surface-2 px-4 py-3">
+              <p className="text-xs font-medium uppercase tracking-[0.14em] text-faint">
+                {t.history.extremesMax}
+              </p>
+              <p className="mt-1 text-2xl font-semibold tracking-tight text-ink">
+                {extremes.max
+                  ? formatNumber(extremes.max.value, 2)
+                  : "--"}
+                {unit && (
+                  <span className="text-sm font-normal text-faint">
+                    {" "}
+                    {unit}
+                  </span>
+                )}
+              </p>
+              {extremes.max && (
+                <p className="mt-1 text-xs text-faint">
+                  {t.history.recordedAt}{" "}
+                  {formatDateTime(extremes.max.timestamp, preferences)}
+                </p>
+              )}
+            </div>
+            <div className="rounded-xl bg-surface-2 px-4 py-3">
+              <p className="text-xs font-medium uppercase tracking-[0.14em] text-faint">
+                {t.history.extremesAvg}
+              </p>
+              <p className="mt-1 text-2xl font-semibold tracking-tight text-ink">
+                {extremes.avg !== null
+                  ? formatNumber(extremes.avg, 2)
+                  : "--"}
+                {unit && (
+                  <span className="text-sm font-normal text-faint">
+                    {" "}
+                    {unit}
+                  </span>
+                )}
+              </p>
+            </div>
+            <div className="rounded-xl bg-surface-2 px-4 py-3">
+              <p className="text-xs font-medium uppercase tracking-[0.14em] text-faint">
+                {t.analytics.readings}
+              </p>
+              <p className="mt-1 text-2xl font-semibold tracking-tight text-ink">
+                {formatNumber(extremes.count, 0)}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <p className="py-6 text-center text-sm text-faint">
+            {t.history.noBuckets}
+          </p>
+        )}
       </Card>
     </div>
   );
