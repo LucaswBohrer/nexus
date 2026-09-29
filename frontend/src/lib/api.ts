@@ -4,7 +4,7 @@ import type {
   MonitoringEventsResponse,
 } from "../types/monitoring";
 
-const API_URL = "http://localhost:8000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export async function getCurrentReading(): Promise<ElectricalReading> {
   const response = await fetch(`${API_URL}/api/monitoring/current`, {

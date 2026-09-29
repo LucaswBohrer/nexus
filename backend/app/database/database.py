@@ -1,9 +1,9 @@
 import sqlite3
 from datetime import datetime
-from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-DB_PATH = BASE_DIR / "nexus.db"
+from app.config import settings
+
+DB_PATH = settings.database_path
 
 
 def get_connection():
