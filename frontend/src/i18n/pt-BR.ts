@@ -118,12 +118,20 @@ export const ptBR = {
     min: "Mín",
     max: "Máx",
     avg: "Méd",
+    viewAnalytics: "Ver análises",
   },
   monitor: {
     title: "Monitor",
     subtitle: "Telemetria em tempo real",
     liveReading: "Leitura ao vivo",
     timestamp: "Horário da leitura",
+    realtime: "Tempo real",
+    polling: "Atualização periódica",
+    streamUnavailable:
+      "Conexão em tempo real indisponível — usando atualização periódica.",
+    recentPower: "Potência ativa recente",
+    streamNote:
+      "Transmitido pelo backend a cada segundo (SSE); sem conexão, o app recorre ao polling.",
   },
   history: {
     title: "Histórico",
@@ -148,6 +156,13 @@ export const ptBR = {
     readingsInBucket: "{n} leituras",
     noBuckets: "Sem dados neste período",
     rangeTooLarge: "Período muito grande para a agregação escolhida.",
+    customRange: "Personalizado",
+    extremes: "Extremos do período",
+    extremesMin: "Mínimo",
+    extremesMax: "Máximo",
+    extremesAvg: "Média",
+    readingsCount: "{n} leituras",
+    recordedAt: "registrado em",
   },
   events: {
     title: "Eventos",
@@ -195,9 +210,23 @@ export const ptBR = {
   },
   analytics: {
     title: "Análises",
-    subtitle: "Em breve",
-    message:
-      "Análises avançadas (comparativos, extremos e tendências longas) chegam em uma fase futura do NEXUS 2.0.",
+    subtitle: "Agregados reais por período",
+    period: "Período",
+    periods: {
+      "24h": "24 horas",
+      "7d": "7 dias",
+      "31d": "31 dias",
+    },
+    energyInPeriod: "Energia no período",
+    readings: "Leituras",
+    episodes: "Episódios",
+    openEpisodes: "{n} em andamento",
+    eventsBySeverity: "Eventos por severidade",
+    eventsByStatus: "Eventos por status",
+    perMetric: "Métricas no período",
+    metric: "Métrica",
+    emptyPeriod: "Sem dados neste período",
+    note: "Agregados calculados pelo backend a partir das leituras armazenadas.",
   },
   simulation: {
     title: "Simulação",

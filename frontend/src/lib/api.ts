@@ -1,4 +1,5 @@
 import type {
+  AnalyticsOverview,
   DiagnosticEpisode,
   DiagnosticResponse,
   ElectricalReading,
@@ -9,6 +10,7 @@ import type {
   HistoryBucket,
   HistoryBucketSize,
   HistoryBucketsResponse,
+  HistoryExtremesResponse,
   HistoryMetric,
   MonitoringEventsResponse,
   NormalizedSeverity,
@@ -98,6 +100,16 @@ function apiFetch(input: RequestInfo | URL, init?: RequestInit) {
 
 function apiUrl(path: string): string {
   return `${getApiBaseUrl()}${path}`;
+}
+
+/**
+ * URL absoluta para EventSource (SSE) — usa a mesma resolução de
+ * getApiBaseUrl() que o apiFetch. EventSource não aceita headers
+ * customizados (ex.: Bypass-Tunnel-Reminder); se o stream falhar, o
+ * chamador deve recorrer ao polling.
+ */
+export function getStreamUrl(path: string): string {
+  return apiUrl(path);
 }
 
 export async function getCurrentReading(): Promise<ElectricalReading> {
@@ -356,6 +368,51 @@ export async function getSystemDatabase(): Promise<SystemDatabaseResponse> {
   const response = await apiFetch(apiUrl("/api/v1/system/database"), {
     cache: "no-store",
   });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  return response.json();
+}
+
+// ---------------------------------------------------------------------------
+// NEXUS 2.2 — extremos, análises e stream
+// ---------------------------------------------------------------------------
+
+export async function getHistoryExtremes(params: {
+  metric: HistoryMetric;
+  from: string;
+  to: string;
+}): Promise<HistoryExtremesResponse> {
+  const query = new URLSearchParams({
+    metric: params.metric,
+    from: params.from,
+    to: params.to,
+  });
+  const response = await apiFetch(apiUrl(`/api/v1/history/extremes?${query}`), {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  return response.json();
+}
+
+export async function getAnalyticsOverview(params: {
+  from: string;
+  to: string;
+}): Promise<AnalyticsOverview> {
+  const query = new URLSearchParams({
+    from: params.from,
+    to: params.to,
+  });
+  const response = await apiFetch(
+    apiUrl(`/api/v1/analytics/overview?${query}`),
+    { cache: "no-store" }
+  );
 
   if (!response.ok) {
     throw await parseError(response);

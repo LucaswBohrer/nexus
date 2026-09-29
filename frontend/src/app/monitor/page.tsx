@@ -5,17 +5,34 @@ import {
   Activity,
   Cpu,
   Gauge,
+  Radio,
   Thermometer,
   Timer,
+  TimerOff,
   Waves,
   Zap,
 } from "lucide-react";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
-import { getCurrentReading } from "../../lib/api";
 import { formatDateTime, formatNumber, formatTime } from "../../lib/format";
 import { usePreferences } from "../../lib/preferences";
-import { useNow, usePoll } from "../../lib/usePoll";
-import { Badge, Card, ErrorBanner, LoadingState, PageHeader } from "../../components/ui";
+import { useRealtimeReading } from "../../lib/useStream";
+import {
+  Badge,
+  Card,
+  CardHeader,
+  ErrorBanner,
+  LoadingState,
+  PageHeader,
+} from "../../components/ui";
 
 function LiveMetric({
   icon: Icon,
@@ -50,12 +67,13 @@ function LiveMetric({
 
 export default function MonitorPage() {
   const { t, preferences } = usePreferences();
-  useNow(5000);
-  const { data: reading, error, loading, refresh } = usePoll(
-    getCurrentReading,
-    preferences.pollingIntervalMs,
-    t.common.connectionError
-  );
+  const {
+    reading,
+    transport,
+    error,
+    recent,
+    loading,
+  } = useRealtimeReading(preferences.pollingIntervalMs, t.common.connectionError);
 
   const status = reading?.status ?? "normal";
   const apparentPower =
@@ -67,21 +85,29 @@ export default function MonitorPage() {
         title={t.monitor.title}
         subtitle={t.monitor.subtitle}
         actions={
-          <Badge
-            tone={status}
-            icon={Activity}
-          >
-            {t.status[status as "normal" | "warning" | "critical"]}
-          </Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge
+              tone={transport === "sse" ? "normal" : "warning"}
+              icon={transport === "sse" ? Radio : TimerOff}
+            >
+              {transport === "sse" ? t.monitor.realtime : t.monitor.polling}
+            </Badge>
+            <Badge tone={status} icon={Activity}>
+              {t.status[status as "normal" | "warning" | "critical"]}
+            </Badge>
+          </div>
         }
       />
+
+      {transport === "poll" && reading && (
+        <p className="text-xs text-faint">{t.monitor.streamUnavailable}</p>
+      )}
 
       {error && (
         <ErrorBanner
           message={
             error === "unauthorized" ? t.common.unauthorized : error
           }
-          onRetry={refresh}
         />
       )}
 
@@ -139,6 +165,74 @@ export default function MonitorPage() {
               unit=""
             />
           </div>
+
+          <Card>
+            <CardHeader
+              eyebrow={t.monitor.recentPower}
+              title={`${t.monitor.recentPower} (kW)`}
+            />
+            <div className="mt-4 h-[220px] w-full">
+              {recent.length < 2 ? (
+                <div className="flex h-full items-center justify-center text-sm text-faint">
+                  {t.common.waitingData}
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart
+                    data={recent.map((p) => ({
+                      label: new Date(p.t).toLocaleTimeString("pt-BR", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      }),
+                      power: p.active_power,
+                    }))}
+                    margin={{ top: 10, right: 5, left: -10, bottom: 0 }}
+                  >
+                    <CartesianGrid
+                      stroke="var(--border)"
+                      vertical={false}
+                    />
+                    <XAxis
+                      dataKey="label"
+                      tick={{ fill: "var(--faint)", fontSize: 10 }}
+                      axisLine={false}
+                      tickLine={false}
+                      minTickGap={48}
+                    />
+                    <YAxis
+                      tick={{ fill: "var(--faint)", fontSize: 10 }}
+                      axisLine={false}
+                      tickLine={false}
+                      domain={["auto", "auto"]}
+                      tickFormatter={(v: number) => formatNumber(v, 1)}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "var(--surface)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "10px",
+                        color: "var(--text)",
+                      }}
+                      formatter={(value) => [
+                        `${formatNumber(Number(value), 2)} kW`,
+                        t.dashboard.activePower,
+                      ]}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="power"
+                      stroke="var(--info)"
+                      strokeWidth={2}
+                      dot={false}
+                      isAnimationActive={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+            <p className="mt-3 text-xs text-faint">{t.monitor.streamNote}</p>
+          </Card>
 
           <Card>
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-faint">

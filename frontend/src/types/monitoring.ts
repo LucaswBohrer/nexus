@@ -180,3 +180,46 @@ export type SettingValue = string | number | boolean | null | undefined;
 export interface SettingsResponse {
   settings: Record<string, SettingValue>;
 }
+
+// ---------------------------------------------------------------------------
+// NEXUS 2.2 — stream (SSE), extremos e análises
+// ---------------------------------------------------------------------------
+
+/** Evento SSE de GET /api/v1/stream/readings. */
+export interface StreamReadingEvent {
+  reading: ElectricalReading;
+  diagnosis_status: "normal" | "warning" | "critical";
+  severity: NormalizedSeverity;
+  server_ts: string;
+}
+
+export interface ExtremePoint {
+  value: number;
+  timestamp: string;
+}
+
+/** GET /api/v1/history/extremes — null quando o período está vazio. */
+export interface HistoryExtremesResponse {
+  metric: HistoryMetric;
+  from: string;
+  to: string;
+  min: ExtremePoint | null;
+  max: ExtremePoint | null;
+  avg: number | null;
+  count: number;
+}
+
+/** GET /api/v1/analytics/overview — agregados reais do período. */
+export interface AnalyticsOverview {
+  from: string;
+  to: string;
+  readings_count: number;
+  energy_kwh: number;
+  per_metric: Record<string, MetricAggregate>;
+  events_by_severity: Record<string, number>;
+  events_by_status: Record<string, number>;
+  episodes: {
+    total: number;
+    open: number;
+  };
+}
