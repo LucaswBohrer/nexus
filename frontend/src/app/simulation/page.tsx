@@ -108,7 +108,10 @@ export default function SimulationPage() {
   const [remaining, setRemaining] = useState<number | null>(null);
 
   useEffect(() => {
-    setRemaining(status?.remaining_seconds ?? null);
+    function syncFromBackend() {
+      setRemaining(status?.remaining_seconds ?? null);
+    }
+    syncFromBackend();
   }, [status]);
 
   const ticking = remaining !== null && remaining > 0;
@@ -154,7 +157,10 @@ export default function SimulationPage() {
   }, [loadSessions]);
 
   useEffect(() => {
-    void loadSessions();
+    function initialLoad() {
+      void loadSessions();
+    }
+    initialLoad();
     const id = window.setInterval(() => void loadSessions(), 30_000);
     return () => window.clearInterval(id);
   }, [loadSessions]);
