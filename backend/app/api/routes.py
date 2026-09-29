@@ -12,6 +12,15 @@ from app.services.monitoring import telemetry_service
 
 router = APIRouter(prefix="/api")
 
+# NEXUS 2.1 severity normalization map for legacy clients: the database
+# stores info/warning/critical, the legacy contract used low/medium/high.
+# Unknown values pass through untouched.
+_LEGACY_SEVERITY = {
+    "info": "low",
+    "warning": "medium",
+    "critical": "high",
+}
+
 
 @router.get("/monitoring/current", response_model=ElectricalReading)
 def get_current_reading():
@@ -37,8 +46,13 @@ def get_history(
 def get_events(
     limit: int = Query(default=20, ge=1, le=MAX_EVENTS_LIMIT),
 ):
+    events = get_recent_events(limit)
+    # NEXUS 2.1 stores severity normalized (info/warning/critical); legacy
+    # clients expect the old low/medium/high vocabulary.
+    for event in events:
+        event["severity"] = _LEGACY_SEVERITY.get(event["severity"], event["severity"])
     return {
-        "events": get_recent_events(limit),
+        "events": events,
     }
 
 

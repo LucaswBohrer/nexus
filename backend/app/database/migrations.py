@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 # Bump this when a new migration is added to _MIGRATIONS.
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 # ---------------------------------------------------------------------------
 # Timestamp policy (NEXUS 2.1)
@@ -204,6 +204,18 @@ def _convert_legacy_timestamps(connection, table: str, columns: list[str]) -> No
         )
 
 
+def _migrate_v2(connection) -> None:
+    # Consecutive-normal-tick counter for the event lifecycle: a condition
+    # must be absent for K ticks before its event is resolved.
+    existing = _existing_columns(connection, "monitoring_events")
+    if "normal_streak" not in existing:
+        connection.execute(
+            "ALTER TABLE monitoring_events ADD COLUMN normal_streak INTEGER DEFAULT 0"
+        )
+    connection.commit()
+
+
 _MIGRATIONS = {
     1: _migrate_v1,
+    2: _migrate_v2,
 }

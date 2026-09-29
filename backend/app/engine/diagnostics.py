@@ -67,6 +67,7 @@ def analyze_reading(
             "message": f"High voltage detected: {voltage:.1f} V",
             "recommendation": recommendation,
             "threshold": t["voltage_max"],
+            "value": voltage,
         })
     elif voltage < t["voltage_min"]:
         anomalies.append("LOW_VOLTAGE")
@@ -79,6 +80,7 @@ def analyze_reading(
             "message": f"Low voltage detected: {voltage:.1f} V",
             "recommendation": recommendation,
             "threshold": t["voltage_min"],
+            "value": voltage,
         })
 
     if frequency > t["frequency_max"] or frequency < t["frequency_min"]:
@@ -92,6 +94,7 @@ def analyze_reading(
             "message": f"Frequency outside expected range: {frequency:.2f} Hz",
             "recommendation": recommendation,
             "threshold": t["frequency_max"],
+            "value": frequency,
         })
 
     if power_factor < t["power_factor_min"]:
@@ -105,6 +108,7 @@ def analyze_reading(
             "message": f"Low power factor detected: {power_factor:.2f}",
             "recommendation": recommendation,
             "threshold": t["power_factor_min"],
+            "value": power_factor,
         })
 
     if temperature > t["temperature_max"]:
@@ -118,6 +122,7 @@ def analyze_reading(
             "message": f"High equipment temperature detected: {temperature:.1f} °C",
             "recommendation": recommendation,
             "threshold": t["temperature_max"],
+            "value": temperature,
         })
 
     if not anomalies:

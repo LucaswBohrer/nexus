@@ -112,7 +112,7 @@ class MigrationTest(unittest.TestCase):
         ).fetchone()
         conn.close()
 
-        self.assertEqual(version, 1)
+        self.assertEqual(version, migrations.CURRENT_SCHEMA_VERSION)
         self.assertIn("diagnostic_episodes", tables)
         self.assertIn("simulation_sessions", tables)
         self.assertIn("settings", tables)
@@ -133,7 +133,7 @@ class MigrationTest(unittest.TestCase):
         conn = sqlite3.connect(self.db_path)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         conn.close()
-        self.assertEqual(version, 1)
+        self.assertEqual(version, migrations.CURRENT_SCHEMA_VERSION)
 
     def test_legacy_timestamps_converted_from_sao_paulo_to_utc(self):
         _make_v0_database(self.db_path)

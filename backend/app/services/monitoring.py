@@ -6,11 +6,11 @@ from typing import Any
 from app.database.database import (
     get_latest_reading_from_db,
     prune_all,
-    save_event,
     save_reading,
 )
 from app.engine.diagnostics import analyze_reading
 from app.engine.simulator import simulator
+from app.services.events import process_tick_events
 from app.services.settings import get_setting
 
 logger = logging.getLogger(__name__)
@@ -58,8 +58,10 @@ class TelemetryService:
 
         save_reading(reading)
 
-        for event in diagnosis["events"]:
-            save_event(event)
+        # NEXUS 2.1: events have a lifecycle (open -> resolved) with
+        # deduplication per condition. A sustained anomaly produces ONE
+        # event row, not one row per tick.
+        process_tick_events(diagnosis["events"])
 
         self._latest_reading = reading
         self._latest_diagnosis = {
