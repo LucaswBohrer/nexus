@@ -56,6 +56,24 @@ def analyze_reading(
     temperature = reading["temperature"]
     timestamp = reading["timestamp"]
 
+    # NEXUS 2.3: sensor_failure freezes the electrical values. The frozen
+    # reading carries an explicit ``stale`` marker (set by the simulator);
+    # surface it as a first-class diagnostic condition instead of letting
+    # stale-but-normal-looking values pass silently.
+    if reading.get("stale"):
+        anomalies.append("SENSOR_STALE")
+        recommendation = (
+            "Sensor readings are frozen; check the data source connection."
+        )
+        recommendations.append(recommendation)
+        events.append({
+            "timestamp": timestamp,
+            "event_type": "SENSOR_STALE",
+            "severity": "warning",
+            "message": "Stale sensor readings detected: values stopped updating",
+            "recommendation": recommendation,
+        })
+
     if voltage > t["voltage_max"]:
         anomalies.append("HIGH_VOLTAGE")
         recommendation = "Inspect voltage regulation and supply conditions."
