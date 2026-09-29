@@ -175,6 +175,8 @@ export interface SystemDatabaseResponse {
   journal_mode: string;
 }
 
+export type SettingValue = string | number | boolean | null | undefined;
+
 export interface SettingsResponse {
-  settings: Record<string, unknown>;
+  settings: Record<string, SettingValue>;
 }

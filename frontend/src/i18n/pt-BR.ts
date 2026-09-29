@@ -287,8 +287,27 @@ export const ptBR = {
       densityCompact: "Compacta",
       polling: "Atualização automática",
       pollingOff: "Desligada",
+      favoriteMetricsHint:
+        "Métricas exibidas como cards no painel Visão geral.",
     },
     storedLocally: "Preferências salvas neste dispositivo.",
+    displayPrefs: "Preferências de exibição",
+    displayPrefsHint:
+      "Salvas apenas neste dispositivo (localStorage). Nunca são enviadas ao backend.",
+    theme: "Tema",
+    themeLight: "Claro",
+    themeDark: "Escuro",
+    language: "Idioma",
+    dateFormat: "Formato de data",
+    defaultRange: "Período padrão",
+    density: "Densidade",
+    densityComfortable: "Confortável",
+    densityCompact: "Compacta",
+    polling: "Atualização automática",
+    polling2s: "A cada 2 segundos",
+    polling5s: "A cada 5 segundos",
+    polling10s: "A cada 10 segundos",
+    polling30s: "A cada 30 segundos",
   },
 };
 
