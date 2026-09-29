@@ -1,6 +1,4 @@
-fastapi
-uvicorn[standard]
-numpy
-pandas
-scikit-learn
-pydantic-settings
+# Pinned to the versions validated with the test suite.
+fastapi==0.142.0
+uvicorn[standard]==0.54.0
+pydantic-settings==2.15.0
