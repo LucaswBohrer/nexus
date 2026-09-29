@@ -4,6 +4,7 @@ New functionality lives here. The legacy /api/* endpoints keep their exact
 contracts and are implemented in app.api.routes.
 """
 
+import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -17,6 +18,7 @@ from app.services.aggregation import (
     get_stats_summary,
     parse_bound,
 )
+from app.services.errors import get_errors
 from app.services.events import (
     EventError,
     EventNotFound,
@@ -148,3 +150,47 @@ def patch_event(event_id: int, body: EventTransition):
     except EventError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"event": event}
+
+
+# ---------------------------------------------------------------------------
+# System / observability
+# ---------------------------------------------------------------------------
+
+
+@router.get("/system/errors")
+def system_errors():
+    """Last 100 process errors, latest first (in-memory ring buffer)."""
+    return {"errors": get_errors()}
+
+
+@router.get("/system/database")
+def system_database():
+    """SQLite database introspection: path, size, tables, schema version."""
+    from app.database import database as database_module
+    from app.database.database import get_connection
+    from app.database.migrations import get_schema_version
+
+    db_path = str(database_module.DB_PATH)
+    connection = get_connection()
+    try:
+        tables = [
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' ORDER BY name"
+            ).fetchall()
+        ]
+        journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+        user_version = get_schema_version(connection)
+    finally:
+        connection.close()
+
+    return {
+        "path": db_path,
+        "size_bytes": (
+            os.path.getsize(db_path) if os.path.exists(db_path) else 0
+        ),
+        "tables": tables,
+        "user_version": user_version,
+        "journal_mode": journal_mode,
+    }

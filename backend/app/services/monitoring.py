@@ -11,6 +11,7 @@ from app.database.database import (
 )
 from app.engine.diagnostics import analyze_reading
 from app.engine.simulator import simulator
+from app.services.errors import record_error
 from app.services.events import process_tick_events
 from app.services.settings import get_setting
 
@@ -121,6 +122,7 @@ class TelemetryService:
                 break
             except Exception as e:
                 logger.exception("Error executing telemetry cycle: %s", e)
+                record_error(f"Telemetry tick failed: {e}", context="telemetry")
                 try:
                     await asyncio.sleep(interval)
                 except asyncio.CancelledError:

@@ -2,6 +2,9 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings
 
+# NEXUS 2.1 backend version, reported by GET /api/health.
+APP_VERSION = "2.1.0"
+
 
 class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"

@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.deps import require_api_key
 from app.database.database import (
     MAX_EVENTS_LIMIT,
     MAX_HISTORY_LIMIT,
@@ -63,7 +64,7 @@ def get_simulation_mode():
     }
 
 
-@router.post("/simulation/mode/{mode}")
+@router.post("/simulation/mode/{mode}", dependencies=[Depends(require_api_key)])
 def set_simulation_mode(mode: str):
     try:
         simulator.set_mode(mode)
