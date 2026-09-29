@@ -4,14 +4,26 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.config import settings
+from app.database.migrations import run_migrations
 
 logger = logging.getLogger(__name__)
 
 DB_PATH = settings.database_path
 
-# Retention policy: telemetry writes ~1 reading/sec (+ events) forever, so
-# tables must not grow without bound. Rows older than this are pruned.
-DATA_RETENTION_DAYS = 30
+# Per-table retention policy (NEXUS 2.1): telemetry writes ~1 reading/sec
+# forever, so tables must not grow without bound. These are the seed
+# defaults; at runtime they are overridable via the settings service
+# (retention.<table>_days keys). `settings` itself is never pruned.
+RETENTION_DEFAULTS: dict[str, int] = {
+    "readings": 30,
+    "events": 90,
+    "diagnostic_episodes": 90,
+    "simulation_sessions": 180,
+}
+
+# Backwards-compatible alias: the legacy retention knob always referred to
+# the readings table.
+DATA_RETENTION_DAYS = RETENTION_DEFAULTS["readings"]
 
 # Hard ceiling for paginated reads. The API layer validates `limit` with
 # FastAPI Query constraints; this is a defense-in-depth guard so a missed
@@ -102,35 +114,49 @@ def _init_database():
     """)
 
     connection.commit()
+
+    # Bring the schema up to date (idempotent; no-op when already current).
+    run_migrations(connection)
     connection.close()
 
-    pruned = prune_old_data()
-    if pruned["readings_deleted"] or pruned["events_deleted"]:
+    pruned = prune_all()
+    total = sum(pruned.values())
+    if total:
         logger.info(
-            "Pruned old telemetry data on startup: %d readings, %d events removed "
-            "(retention: %d days)",
-            pruned["readings_deleted"],
-            pruned["events_deleted"],
-            DATA_RETENTION_DAYS,
+            "Pruned old telemetry data on startup: %s (retention: %s)",
+            ", ".join(f"{count} {table}" for table, count in pruned.items() if count),
+            RETENTION_DEFAULTS,
         )
 
 
-def prune_old_data(retention_days: int = DATA_RETENTION_DAYS) -> dict[str, int]:
-    """Delete readings/events older than `retention_days`.
+def _utc_cutoff(days: int) -> str:
+    # Cutoffs are UTC ISO-8601 strings. Every post-migration timestamp is
+    # UTC in the same fixed-width format, so lexicographic comparison is
+    # chronological.
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
-    Returns the number of deleted rows per table. Never raises: pruning is
+
+def prune_old_data(
+    readings_days: int = RETENTION_DEFAULTS["readings"],
+    events_days: int = RETENTION_DEFAULTS["events"],
+) -> dict[str, int]:
+    """Delete readings/events older than their per-table retention windows.
+
+    Contract preserved for existing callers: returns exactly
+    {"readings_deleted", "events_deleted"}. Never raises: pruning is
     best-effort maintenance and must not break startup or the telemetry loop.
     """
-    cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat()
     try:
         connection = get_connection()
         readings_cursor = connection.execute(
             "DELETE FROM electrical_readings WHERE timestamp < ?",
-            (cutoff,),
+            (_utc_cutoff(readings_days),),
         )
+        # Events may predate the lifecycle columns; fall back to the legacy
+        # timestamp column for those rows.
         events_cursor = connection.execute(
-            "DELETE FROM monitoring_events WHERE timestamp < ?",
-            (cutoff,),
+            "DELETE FROM monitoring_events WHERE COALESCE(opened_at, timestamp) < ?",
+            (_utc_cutoff(events_days),),
         )
         connection.commit()
         readings_deleted = readings_cursor.rowcount
@@ -143,6 +169,58 @@ def prune_old_data(retention_days: int = DATA_RETENTION_DAYS) -> dict[str, int]:
     except Exception:
         logger.exception("Failed to prune old telemetry data")
         return {"readings_deleted": 0, "events_deleted": 0}
+
+
+def prune_auxiliary_data(
+    episodes_days: int = RETENTION_DEFAULTS["diagnostic_episodes"],
+    sessions_days: int = RETENTION_DEFAULTS["simulation_sessions"],
+) -> dict[str, int]:
+    """Delete old diagnostic episodes and simulation sessions.
+
+    The settings table is permanent and is never pruned. Never raises.
+    """
+    try:
+        connection = get_connection()
+        episodes_cursor = connection.execute(
+            "DELETE FROM diagnostic_episodes WHERE started_at < ?",
+            (_utc_cutoff(episodes_days),),
+        )
+        sessions_cursor = connection.execute(
+            "DELETE FROM simulation_sessions WHERE started_at < ?",
+            (_utc_cutoff(sessions_days),),
+        )
+        connection.commit()
+        episodes_deleted = episodes_cursor.rowcount
+        sessions_deleted = sessions_cursor.rowcount
+        connection.close()
+        return {
+            "episodes_deleted": episodes_deleted,
+            "sessions_deleted": sessions_deleted,
+        }
+    except Exception:
+        logger.exception("Failed to prune auxiliary telemetry data")
+        return {"episodes_deleted": 0, "sessions_deleted": 0}
+
+
+def prune_all(retention: dict[str, int] | None = None) -> dict[str, int]:
+    """Prune every telemetry table using per-table retention windows.
+
+    `retention` overrides RETENTION_DEFAULTS; keys are "readings", "events",
+    "diagnostic_episodes" and "simulation_sessions". Called by startup and
+    by the hourly telemetry maintenance.
+    """
+    retention = {**RETENTION_DEFAULTS, **(retention or {})}
+    counts = prune_old_data(
+        readings_days=retention["readings"],
+        events_days=retention["events"],
+    )
+    counts.update(
+        prune_auxiliary_data(
+            episodes_days=retention["diagnostic_episodes"],
+            sessions_days=retention["simulation_sessions"],
+        )
+    )
+    return counts
 
 
 def get_latest_reading_from_db() -> dict | None:

@@ -5,7 +5,7 @@ from typing import Any
 
 from app.database.database import (
     get_latest_reading_from_db,
-    prune_old_data,
+    prune_all,
     save_event,
     save_reading,
 )
@@ -49,19 +49,22 @@ class TelemetryService:
         """Prune rows older than the retention policy, at most once per hour.
 
         Telemetry writes ~1 reading/sec forever; without pruning the SQLite
-        tables grow without bound. prune_old_data() is best-effort and never
+        tables grow without bound. prune_all() is best-effort and never
         raises, so the tick is unaffected.
         """
         now = time.monotonic()
         if now - self._last_prune_ts < PRUNE_INTERVAL_SECONDS:
             return
         self._last_prune_ts = now
-        pruned = prune_old_data()
-        if pruned["readings_deleted"] or pruned["events_deleted"]:
+        pruned = prune_all()
+        if any(pruned.values()):
             logger.info(
-                "Pruned old telemetry data: %d readings, %d events removed",
-                pruned["readings_deleted"],
-                pruned["events_deleted"],
+                "Pruned old telemetry data: %s",
+                ", ".join(
+                    f"{count} {table}"
+                    for table, count in pruned.items()
+                    if count
+                ),
             )
 
     async def _run_loop(self):

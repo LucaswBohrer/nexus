@@ -15,7 +15,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -59,8 +59,10 @@ class RetentionTest(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def test_prune_removes_old_rows_and_keeps_recent(self):
-        old_ts = (datetime.now() - timedelta(days=60)).isoformat()
-        recent_ts = datetime.now().isoformat()
+        # Retention defaults: readings 30d, events 90d (NEXUS 2.1). Seed rows
+        # beyond both windows so they are pruned; recent rows survive.
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=100)).isoformat()
+        recent_ts = datetime.now(timezone.utc).isoformat()
         _seed_rows(self.db_path, 10, 5, old_ts)
         _seed_rows(self.db_path, 7, 3, recent_ts)
 
@@ -82,7 +84,7 @@ class RetentionTest(unittest.TestCase):
         self.assertEqual(pruned, {"readings_deleted": 0, "events_deleted": 0})
 
     def test_init_database_prunes_stale_rows_on_startup(self):
-        old_ts = (datetime.now() - timedelta(days=90)).isoformat()
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=100)).isoformat()
         _seed_rows(self.db_path, 20, 10, old_ts)
 
         database.init_database()  # startup path

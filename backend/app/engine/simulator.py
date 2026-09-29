@@ -1,5 +1,5 @@
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class ElectricalSimulator:
@@ -52,7 +52,9 @@ class ElectricalSimulator:
         active_power = round((voltage * current * power_factor) / 1000, 3)
 
         return {
-            "timestamp": datetime.now(),
+            # NEXUS 2.1: all new timestamps are timezone-aware UTC. The
+            # migration layer converts legacy America/Sao_Paulo values.
+            "timestamp": datetime.now(timezone.utc),
             "voltage": voltage,
             "current": current,
             "frequency": frequency,
