@@ -99,6 +99,25 @@ event is never reopened** — a later occurrence creates a new event.
 `acknowledged → resolved`. Anything else (including any transition out of
 `resolved`, or an unknown action) returns `422`; unknown ids return `404`.
 
+## Diagnostics
+
+A **diagnostic episode** is the whole-system view of an abnormal period
+(per-condition detail lives in events). Rules mirror the event lifecycle:
+the system entering an abnormal state with no open episode opens one;
+while abnormal the open episode is updated (severity = worst seen,
+`rules`/`recommendations` unioned, `peak_values` track per-metric
+min/max actually observed); 5 consecutive normal ticks close it
+(`status='resolved'`, `ended_at` set).
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/diagnostics/episodes` | Episodes, latest first |
+
+`GET /api/v1/diagnostics/episodes` params: `limit` (1–200, default 20).
+Response: `{"episodes": [{"id", "started_at", "ended_at", "status",
+"severity", "rules": [...], "peak_values": {"voltage": {"min", "max"}, ...},
+"recommendations": [...]}]}`.
+
 ## Health / system
 
 | Method | Endpoint | Description |

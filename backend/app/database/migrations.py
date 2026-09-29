@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 # Bump this when a new migration is added to _MIGRATIONS.
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 # ---------------------------------------------------------------------------
 # Timestamp policy (NEXUS 2.1)
@@ -215,7 +215,19 @@ def _migrate_v2(connection) -> None:
     connection.commit()
 
 
+def _migrate_v3(connection) -> None:
+    # Consecutive-normal-tick counter for diagnostic episodes (NEXUS 2.1
+    # §14): an episode closes only after K normal ticks.
+    existing = _existing_columns(connection, "diagnostic_episodes")
+    if "normal_streak" not in existing:
+        connection.execute(
+            "ALTER TABLE diagnostic_episodes ADD COLUMN normal_streak INTEGER DEFAULT 0"
+        )
+    connection.commit()
+
+
 _MIGRATIONS = {
     1: _migrate_v1,
     2: _migrate_v2,
+    3: _migrate_v3,
 }

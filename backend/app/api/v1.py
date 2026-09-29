@@ -18,6 +18,7 @@ from app.services.aggregation import (
     get_stats_summary,
     parse_bound,
 )
+from app.services.episodes import list_episodes
 from app.services.errors import get_errors
 from app.services.events import (
     EventError,
@@ -150,6 +151,19 @@ def patch_event(event_id: int, body: EventTransition):
     except EventError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"event": event}
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics
+# ---------------------------------------------------------------------------
+
+
+@router.get("/diagnostics/episodes")
+def get_diagnostic_episodes(
+    limit: int = Query(default=20, ge=1, le=200),
+):
+    """Diagnostic episodes: whole-system abnormal periods, latest first."""
+    return {"episodes": list_episodes(limit)}
 
 
 # ---------------------------------------------------------------------------

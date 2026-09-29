@@ -121,7 +121,7 @@ class SystemHealthTest(unittest.TestCase):
             "simulation_sessions",
         ):
             self.assertIn(table, body["tables"])
-        self.assertEqual(body["user_version"], 2)
+        self.assertEqual(body["user_version"], 3)
         self.assertIn("journal_mode", body)
 
     def test_system_errors_shape(self):

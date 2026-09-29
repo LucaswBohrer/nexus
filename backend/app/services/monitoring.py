@@ -13,6 +13,7 @@ from app.engine.diagnostics import analyze_reading
 from app.engine.simulator import simulator
 from app.services.errors import record_error
 from app.services.events import process_tick_events
+from app.services.episodes import process_tick_episode
 from app.services.settings import get_setting
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,10 @@ class TelemetryService:
         # deduplication per condition. A sustained anomaly produces ONE
         # event row, not one row per tick.
         process_tick_events(diagnosis["events"])
+
+        # NEXUS 2.1 §14: track the whole-system diagnostic episode for
+        # this abnormal period (open/update/close).
+        process_tick_episode(diagnosis, reading)
 
         self._latest_reading = reading
         self._latest_diagnosis = {
