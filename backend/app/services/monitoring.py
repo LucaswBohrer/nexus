@@ -5,6 +5,7 @@ from typing import Any
 
 from app.database.database import (
     get_latest_reading_from_db,
+    prune_old_data,
     save_event,
     save_reading,
 )
@@ -13,6 +14,10 @@ from app.engine.simulator import simulator
 
 logger = logging.getLogger(__name__)
 
+# How often the telemetry loop prunes rows older than the retention policy.
+# Startup already prunes once; this covers long-running processes.
+PRUNE_INTERVAL_SECONDS = 3600.0
+
 
 class TelemetryService:
     def __init__(self):
@@ -20,6 +25,7 @@ class TelemetryService:
         self._task: asyncio.Task | None = None
         self._latest_reading: dict[str, Any] | None = None
         self._latest_diagnosis: dict[str, Any] | None = None
+        self._last_prune_ts: float = 0.0
 
     def _execute_tick(self) -> tuple[dict[str, Any], dict[str, Any]]:
         reading = simulator.generate_reading()
@@ -36,7 +42,27 @@ class TelemetryService:
             "reading": reading,
             "diagnosis": diagnosis,
         }
+        self._maybe_prune_old_data()
         return reading, diagnosis
+
+    def _maybe_prune_old_data(self) -> None:
+        """Prune rows older than the retention policy, at most once per hour.
+
+        Telemetry writes ~1 reading/sec forever; without pruning the SQLite
+        tables grow without bound. prune_old_data() is best-effort and never
+        raises, so the tick is unaffected.
+        """
+        now = time.monotonic()
+        if now - self._last_prune_ts < PRUNE_INTERVAL_SECONDS:
+            return
+        self._last_prune_ts = now
+        pruned = prune_old_data()
+        if pruned["readings_deleted"] or pruned["events_deleted"]:
+            logger.info(
+                "Pruned old telemetry data: %d readings, %d events removed",
+                pruned["readings_deleted"],
+                pruned["events_deleted"],
+            )
 
     async def _run_loop(self):
         logger.info("Telemetry background loop started (1 Hz)")
@@ -45,7 +71,12 @@ class TelemetryService:
         while self._is_running:
             start_time = time.monotonic()
             try:
-                self._execute_tick()
+                # The tick does synchronous SQLite I/O. Running it in a
+                # worker thread keeps the event loop responsive to API
+                # requests even under disk pressure. This is thread-safe:
+                # every DB helper opens its own connection, `random` is
+                # thread-safe, and `_latest_*` updates are atomic stores.
+                await asyncio.to_thread(self._execute_tick)
             except asyncio.CancelledError:
                 break
             except Exception as e:

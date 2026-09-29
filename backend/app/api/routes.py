@@ -1,6 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.database.database import (
+    MAX_EVENTS_LIMIT,
+    MAX_HISTORY_LIMIT,
     get_recent_events,
     get_recent_readings,
 )
@@ -23,16 +25,27 @@ def get_diagnostics():
 
 
 @router.get("/monitoring/history")
-def get_history(limit: int = 50):
+def get_history(
+    limit: int = Query(default=50, ge=1, le=MAX_HISTORY_LIMIT),
+):
     return {
         "readings": get_recent_readings(limit),
     }
 
 
 @router.get("/monitoring/events")
-def get_events(limit: int = 20):
+def get_events(
+    limit: int = Query(default=20, ge=1, le=MAX_EVENTS_LIMIT),
+):
     return {
         "events": get_recent_events(limit),
+    }
+
+
+@router.get("/simulation/mode")
+def get_simulation_mode():
+    return {
+        "mode": simulator.mode,
     }
 
 

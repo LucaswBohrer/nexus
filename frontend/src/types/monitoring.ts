@@ -33,4 +33,21 @@ export interface DiagnosticResponse {
 
 export interface MonitoringEventsResponse {
   events: MonitoringEvent[];
-}
+}
+
+export type SimulationMode =
+  | "normal"
+  | "high_voltage"
+  | "low_voltage"
+  | "low_power_factor"
+  | "high_temperature"
+  | "multiple_anomalies";
+
+export interface SimulationModeResponse {
+  mode: SimulationMode;
+}
+
+export interface SetSimulationModeResponse {
+  mode: SimulationMode;
+  status: string;
+}

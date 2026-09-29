@@ -6,6 +6,11 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     database_url: str = "nexus.db"
+    # Network binding for the API server. Kept at loopback by default for
+    # safety; the demo/launcher script overrides it with 0.0.0.0 so phones
+    # on the same LAN can reach the API.
+    host: str = "127.0.0.1"
+    port: int = 8000
 
     model_config = {
         "env_prefix": "NEXUS_",
