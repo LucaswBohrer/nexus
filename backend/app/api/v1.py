@@ -17,12 +17,22 @@ from app.services.aggregation import (
     get_stats_summary,
     parse_bound,
 )
+from app.services.events import (
+    EventError,
+    EventNotFound,
+    list_events,
+    transition_event,
+)
 
 router = APIRouter(prefix="/api/v1")
 
 
 class SettingUpdate(BaseModel):
     value: Any
+
+
+class EventTransition(BaseModel):
+    action: str
 
 
 @router.get("/settings")
@@ -86,3 +96,55 @@ def get_history(
 def get_summary():
     """Consolidated dashboard statistics, computed from real stored data."""
     return get_stats_summary()
+
+
+# ---------------------------------------------------------------------------
+# Events
+# ---------------------------------------------------------------------------
+
+
+@router.get("/events")
+def get_events_v1(
+    status: str | None = Query(None, description="open, acknowledged, resolved"),
+    severity: str | None = Query(None, description="info, warning, critical"),
+    type: str | None = Query(None, alias="type", description="Event type"),
+    from_: str | None = Query(None, alias="from", description="ISO-8601 (naive = UTC)"),
+    to: str | None = Query(None, description="ISO-8601 (naive = UTC)"),
+    q: str | None = Query(None, description="Substring search in message"),
+    limit: int = Query(50, ge=1, le=200),
+    cursor: int | None = Query(None, description="Paging cursor (event id)"),
+):
+    """List events, latest first, with filters and id-cursor pagination."""
+    try:
+        from_dt = parse_bound(from_, "from") if from_ else None
+        to_dt = parse_bound(to, "to") if to else None
+        items, next_cursor = list_events(
+            status=status,
+            severity=severity,
+            event_type=type,
+            from_dt=from_dt,
+            to_dt=to_dt,
+            q=q,
+            limit=limit,
+            cursor=cursor,
+        )
+    except EventError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"events": items, "next_cursor": next_cursor}
+
+
+@router.patch("/events/{event_id}", dependencies=[Depends(require_api_key)])
+def patch_event(event_id: int, body: EventTransition):
+    """Acknowledge or resolve an event.
+
+    Valid transitions: open -> acknowledged, open -> resolved,
+    acknowledged -> resolved. Anything else returns 422; a resolved
+    event is never reopened.
+    """
+    try:
+        event = transition_event(event_id, body.action)
+    except EventNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except EventError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"event": event}

@@ -33,6 +33,12 @@ NORMAL_TICKS_TO_RESOLVE = 5
 # Lifecycle states an event can be in while its condition may still recur.
 ACTIVE_STATES = ("open", "acknowledged")
 
+# Valid status filter values for the API.
+STATUSES = ("open", "acknowledged", "resolved")
+
+# Valid severities stored in the database.
+SEVERITIES = ("info", "warning", "critical")
+
 
 def event_identity(event: dict[str, Any]) -> tuple[str, Any]:
     """Deduplication key for a condition: (event_type, equipment_id)."""
@@ -151,3 +157,162 @@ def _age_absent_events(
                 "UPDATE monitoring_events SET normal_streak = ? WHERE id = ?",
                 (streak, row["id"]),
             )
+
+
+# ---------------------------------------------------------------------------
+# Query API (used by GET /api/v1/events)
+# ---------------------------------------------------------------------------
+
+_EVENT_COLUMNS = (
+    "id, timestamp, event_type, severity, message, recommendation, status, "
+    "opened_at, closed_at, last_seen, occurrences, last_value, threshold, "
+    "acknowledged_at, acknowledged_by, equipment_id"
+)
+
+
+class EventError(ValueError):
+    """Invalid event query or transition (surfaced as HTTP 422)."""
+
+
+class EventNotFound(Exception):
+    """Event id does not exist (surfaced as HTTP 404)."""
+
+
+def get_event(event_id: int) -> dict[str, Any] | None:
+    connection = get_connection()
+    try:
+        row = connection.execute(
+            f"SELECT {_EVENT_COLUMNS} FROM monitoring_events WHERE id = ?",
+            (event_id,),
+        ).fetchone()
+    finally:
+        connection.close()
+    return dict(row) if row else None
+
+
+def list_events(
+    status: str | None = None,
+    severity: str | None = None,
+    event_type: str | None = None,
+    from_dt: datetime | None = None,
+    to_dt: datetime | None = None,
+    q: str | None = None,
+    limit: int = 50,
+    cursor: int | None = None,
+) -> tuple[list[dict[str, Any]], int | None]:
+    """List events, latest first, with optional filters and id-cursor paging.
+
+    Returns (items, next_cursor); next_cursor is None when there are no
+    more pages. Raises EventError on invalid filter values.
+    """
+    if status is not None and status not in STATUSES:
+        raise EventError(f"Invalid status '{status}'. Valid: {list(STATUSES)}")
+    if severity is not None and severity not in SEVERITIES:
+        raise EventError(
+            f"Invalid severity '{severity}'. Valid: {list(SEVERITIES)}"
+        )
+    limit = max(1, min(limit, 200))
+
+    conditions = []
+    params: list[Any] = []
+    if status is not None:
+        conditions.append("status = ?")
+        params.append(status)
+    if severity is not None:
+        conditions.append("severity = ?")
+        params.append(severity)
+    if event_type is not None:
+        conditions.append("event_type = ?")
+        params.append(event_type)
+    if from_dt is not None:
+        conditions.append("timestamp >= ?")
+        params.append(from_dt.isoformat())
+    if to_dt is not None:
+        conditions.append("timestamp < ?")
+        params.append(to_dt.isoformat())
+    if q:
+        conditions.append("message LIKE ?")
+        params.append(f"%{q}%")
+    if cursor is not None:
+        conditions.append("id < ?")
+        params.append(cursor)
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    connection = get_connection()
+    try:
+        # Fetch one extra row to know whether another page exists.
+        rows = connection.execute(
+            f"""SELECT {_EVENT_COLUMNS} FROM monitoring_events
+                {where}
+                ORDER BY id DESC
+                LIMIT ?""",
+            (*params, limit + 1),
+        ).fetchall()
+    finally:
+        connection.close()
+
+    items = [dict(row) for row in rows[:limit]]
+    next_cursor = items[-1]["id"] if len(rows) > limit else None
+    return items, next_cursor
+
+
+# ---------------------------------------------------------------------------
+# Transitions (used by PATCH /api/v1/events/{id})
+# ---------------------------------------------------------------------------
+
+# action -> (allowed from-states, resulting state)
+_TRANSITIONS = {
+    "acknowledge": (("open",), "acknowledged"),
+    "resolve": (("open", "acknowledged"), "resolved"),
+}
+
+
+def transition_event(
+    event_id: int, action: str, actor: str | None = None
+) -> dict[str, Any]:
+    """Apply a lifecycle transition. Raises EventNotFound / EventError."""
+    if action not in _TRANSITIONS:
+        raise EventError(
+            f"Invalid action '{action}'. Valid: {sorted(_TRANSITIONS)}"
+        )
+    allowed_from, to_state = _TRANSITIONS[action]
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    connection = get_connection()
+    try:
+        row = connection.execute(
+            "SELECT id, status FROM monitoring_events WHERE id = ?",
+            (event_id,),
+        ).fetchone()
+        if row is None:
+            raise EventNotFound(f"No event with id {event_id}")
+        if row["status"] not in allowed_from:
+            raise EventError(
+                f"Cannot '{action}' an event with status '{row['status']}'"
+            )
+
+        if to_state == "acknowledged":
+            connection.execute(
+                """UPDATE monitoring_events
+                   SET status = 'acknowledged',
+                       acknowledged_at = ?, acknowledged_by = ?
+                   WHERE id = ?""",
+                (now_iso, actor, event_id),
+            )
+        else:  # resolved
+            connection.execute(
+                """UPDATE monitoring_events
+                   SET status = 'resolved', closed_at = ?
+                   WHERE id = ?""",
+                (now_iso, event_id),
+            )
+        connection.commit()
+        updated = connection.execute(
+            f"SELECT {_EVENT_COLUMNS} FROM monitoring_events WHERE id = ?",
+            (event_id,),
+        ).fetchone()
+    finally:
+        connection.close()
+
+    logger.info("Event %d: %s -> %s", event_id, row["status"], to_state)
+    return dict(updated)
