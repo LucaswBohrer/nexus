@@ -1,10 +1,57 @@
 import type {
+  DiagnosticEpisode,
+  DiagnosticResponse,
   ElectricalReading,
+  EpisodesResponse,
+  EventsV1Params,
+  EventsV1Response,
+  HealthResponse,
+  HistoryBucket,
+  HistoryBucketSize,
+  HistoryBucketsResponse,
+  HistoryMetric,
   MonitoringEventsResponse,
+  NormalizedSeverity,
   SetSimulationModeResponse,
+  SettingsResponse,
   SimulationMode,
   SimulationModeResponse,
+  StatsSummary,
+  SystemDatabaseResponse,
+  SystemErrorsResponse,
+  V1Event,
 } from "../types/monitoring";
+
+/** Erro HTTP com status e detalhe do backend (ex.: mensagens de 422). */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly detail: string | null;
+
+  constructor(status: number, detail: string | null) {
+    super(detail ?? `Request failed with status ${status}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+async function parseError(response: Response): Promise<ApiError> {
+  let detail: string | null = null;
+  try {
+    const body = await response.json();
+    // FastAPI usa {"detail": ...}; endpoints próprios podem variar.
+    const raw = body?.detail ?? body?.message;
+    detail =
+      typeof raw === "string"
+        ? raw
+        : raw !== undefined && raw !== null
+          ? JSON.stringify(raw)
+          : null;
+  } catch {
+    detail = null;
+  }
+  return new ApiError(response.status, detail);
+}
 
 // Resolve the API base URL at request time, not at build time.
 //
@@ -122,9 +169,197 @@ export async function setSimulationMode(
   });
 
   if (!response.ok) {
-    throw new Error("Failed to set simulation mode");
+    throw await parseError(response);
   }
 
   const data: SetSimulationModeResponse = await response.json();
   return data.mode;
+}
+
+// ---------------------------------------------------------------------------
+// NEXUS 2.1 — API v1
+// ---------------------------------------------------------------------------
+
+/** Diagnóstico atual (regras calculadas no backend, nunca no React). */
+export async function getDiagnostics(): Promise<DiagnosticResponse> {
+  const response = await apiFetch(apiUrl("/api/monitoring/diagnostics"), {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  return response.json();
+}
+
+export async function getHealth(): Promise<HealthResponse> {
+  const response = await apiFetch(apiUrl("/api/health"), {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  return response.json();
+}
+
+export async function getStatsSummary(): Promise<StatsSummary> {
+  const response = await apiFetch(apiUrl("/api/v1/stats/summary"), {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  return response.json();
+}
+
+export async function getHistoryBuckets(params: {
+  metric: HistoryMetric;
+  from: string;
+  to: string;
+  bucket: HistoryBucketSize;
+}): Promise<HistoryBucket[]> {
+  const query = new URLSearchParams({
+    metric: params.metric,
+    from: params.from,
+    to: params.to,
+    bucket: params.bucket,
+  });
+  const response = await apiFetch(apiUrl(`/api/v1/history?${query}`), {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  const data: HistoryBucketsResponse = await response.json();
+  return data.buckets;
+}
+
+export async function getEventsV1(
+  params: EventsV1Params = {}
+): Promise<EventsV1Response> {
+  const query = new URLSearchParams();
+  if (params.status) query.set("status", params.status);
+  if (params.severity)
+    query.set("severity", params.severity as NormalizedSeverity);
+  if (params.type) query.set("type", params.type);
+  if (params.from) query.set("from", params.from);
+  if (params.to) query.set("to", params.to);
+  if (params.q) query.set("q", params.q);
+  if (params.limit !== undefined)
+    query.set("limit", String(params.limit));
+  if (params.cursor !== undefined)
+    query.set("cursor", String(params.cursor));
+
+  const suffix = query.toString();
+  const response = await apiFetch(
+    apiUrl(`/api/v1/events${suffix ? `?${suffix}` : ""}`),
+    { cache: "no-store" }
+  );
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  return response.json();
+}
+
+export async function patchEvent(
+  id: number,
+  action: "acknowledge" | "resolve"
+): Promise<V1Event> {
+  const response = await apiFetch(apiUrl(`/api/v1/events/${id}`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action }),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  const data: { event: V1Event } = await response.json();
+  return data.event;
+}
+
+export async function getSettings(): Promise<Record<string, unknown>> {
+  const response = await apiFetch(apiUrl("/api/v1/settings"), {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  const data: SettingsResponse = await response.json();
+  return data.settings;
+}
+
+export async function updateSetting(
+  key: string,
+  value: unknown
+): Promise<unknown> {
+  const response = await apiFetch(
+    apiUrl(`/api/v1/settings/${encodeURIComponent(key)}`),
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value }),
+      cache: "no-store",
+    }
+  );
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  const data: { key: string; value: unknown } = await response.json();
+  return data.value;
+}
+
+export async function getEpisodes(
+  limit = 20
+): Promise<DiagnosticEpisode[]> {
+  const response = await apiFetch(
+    apiUrl(`/api/v1/diagnostics/episodes?limit=${limit}`),
+    { cache: "no-store" }
+  );
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  const data: EpisodesResponse = await response.json();
+  return data.episodes;
+}
+
+export async function getSystemErrors(): Promise<SystemErrorsResponse> {
+  const response = await apiFetch(apiUrl("/api/v1/system/errors"), {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  return response.json();
+}
+
+export async function getSystemDatabase(): Promise<SystemDatabaseResponse> {
+  const response = await apiFetch(apiUrl("/api/v1/system/database"), {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  return response.json();
 }

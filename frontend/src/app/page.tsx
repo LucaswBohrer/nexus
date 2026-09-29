@@ -6,14 +6,11 @@ import {
   getCurrentReading,
   getEvents,
   getHistory,
-  getSimulationMode,
-  setSimulationMode,
 } from "../lib/api";
 
 import type {
   ElectricalReading,
   MonitoringEvent,
-  SimulationMode,
 } from "../types/monitoring";
 
 import {
@@ -22,10 +19,7 @@ import {
   Bell,
   CheckCircle2,
   Cpu,
-  FlaskConical,
   Gauge,
-  LayoutDashboard,
-  Loader2,
   Radio,
   Thermometer,
   Zap,
@@ -45,15 +39,6 @@ type PowerHistoryPoint = {
   time: string;
   power: number;
 };
-
-const SIMULATION_MODES: { value: SimulationMode; label: string }[] = [
-  { value: "normal", label: "Normal Operation" },
-  { value: "high_voltage", label: "High Voltage" },
-  { value: "low_voltage", label: "Low Voltage" },
-  { value: "low_power_factor", label: "Low Power Factor" },
-  { value: "high_temperature", label: "High Temperature" },
-  { value: "multiple_anomalies", label: "Multiple Anomalies" },
-];
 
 function MetricCard({
   icon: Icon,
@@ -158,12 +143,6 @@ function DiagnosticItem({
   );
 }
 
-function scrollToSection(id: string) {
-  document
-    .getElementById(id)
-    ?.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
 export default function Home() {
   const [reading, setReading] =
     useState<ElectricalReading | null>(null);
@@ -177,43 +156,20 @@ export default function Home() {
   const [loading, setLoading] =
     useState(true);
 
-  // `loading` tracks the initial data load only. `refreshing` tracks
-  // background polls so previous values stay visible while new data is
-  // being fetched (no flicker of the metric cards every 5 seconds).
-  const [refreshing, setRefreshing] =
-    useState(false);
-
   const initialLoadDone =
     useRef(false);
-
-  // Guards the `refreshing` flag when polls overlap (interval poll +
-  // a user-triggered refresh, e.g. after changing the simulation mode).
-  const pendingRefreshes =
-    useRef(0);
 
   const [error, setError] =
     useState<string | null>(null);
 
-  const [currentMode, setCurrentMode] =
-    useState<SimulationMode | null>(null);
-
-  const [modeChanging, setModeChanging] =
-    useState(false);
-
-  const [modeError, setModeError] =
-    useState<string | null>(null);
-
   async function loadReading() {
     // The first call boots the dashboard (cards show "--" placeholders);
-    // every later call is a background refresh that must keep the last
-    // valid values on screen while the new reading is fetched.
+    // every later call is a background refresh that keeps the last valid
+    // values on screen (no flicker) — state is only replaced on success.
     const isInitialLoad = !initialLoadDone.current;
 
     if (isInitialLoad) {
       setLoading(true);
-    } else {
-      pendingRefreshes.current += 1;
-      setRefreshing(true);
     }
 
     try {
@@ -244,13 +200,6 @@ export default function Home() {
       if (isInitialLoad) {
         initialLoadDone.current = true;
         setLoading(false);
-      } else {
-        pendingRefreshes.current -= 1;
-
-        if (pendingRefreshes.current <= 0) {
-          pendingRefreshes.current = 0;
-          setRefreshing(false);
-        }
       }
     }
   }
@@ -280,65 +229,12 @@ export default function Home() {
     }
   }
 
-  async function loadSimulationMode() {
-    try {
-      const mode = await getSimulationMode();
-
-      setCurrentMode(mode);
-      setModeError(null);
-    } catch (err) {
-      console.error(
-        "Failed to load simulation mode:",
-        err
-      );
-
-      setModeError(
-        "Unable to load simulation mode"
-      );
-    }
-  }
-
-  async function handleSimulationModeChange(
-    event: React.ChangeEvent<HTMLSelectElement>
-  ) {
-    const newMode = event.target.value as SimulationMode;
-
-    if (newMode === currentMode || modeChanging) {
-      return;
-    }
-
-    setModeChanging(true);
-    setModeError(null);
-
-    try {
-      const updatedMode = await setSimulationMode(newMode);
-
-      setCurrentMode(updatedMode);
-
-      // Refresh readings immediately so the effect of the new
-      // simulation mode is visible without waiting for the next poll.
-      loadReading();
-    } catch (err) {
-      console.error(
-        "Failed to set simulation mode:",
-        err
-      );
-
-      setModeError(
-        "Unable to change simulation mode"
-      );
-    } finally {
-      setModeChanging(false);
-    }
-  }
-
   useEffect(() => {
     // Defer the initial fetch so setState isn't called synchronously
     // inside the effect body (react-hooks/set-state-in-effect).
     queueMicrotask(() => {
       loadReading();
       loadHistory();
-      loadSimulationMode();
     });
 
     const interval = setInterval(() => {
@@ -380,188 +276,15 @@ export default function Home() {
     reading?.status === "normal";
 
   return (
-    <main className="min-h-screen bg-[#090a0d] text-white">
-      <div className="flex min-h-screen" id="dashboard-top">
+    <div className="space-y-5">
 
-        {/* SIDEBAR */}
-        <aside className="hidden w-64 shrink-0 border-r border-white/5 bg-[#0c0d10] lg:flex lg:flex-col">
-          <div className="flex h-20 items-center gap-3 border-b border-white/5 px-6">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-black">
-              <Zap size={19} />
-            </div>
 
-            <div>
-              <h1 className="text-lg font-semibold tracking-tight">
-                NEXUS
-              </h1>
 
-              <p className="text-[10px] uppercase tracking-[0.2em] text-gray-500">
-                Electrical Intelligence
-              </p>
-            </div>
-          </div>
-
-          <nav className="flex-1 px-4 py-6">
-            <p className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-gray-600">
-              Monitoring
-            </p>
-
-            <button
-              type="button"
-              onClick={() => scrollToSection("dashboard-top")}
-              className="flex w-full items-center gap-3 rounded-xl bg-white/5 px-3 py-2.5 text-sm text-white"
-            >
-              <LayoutDashboard size={17} />
-              Dashboard
-            </button>
-
-            <button
-              type="button"
-              onClick={() => scrollToSection("power-chart")}
-              className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-gray-500 transition hover:bg-white/5 hover:text-white"
-            >
-              <Activity size={17} />
-              Analytics
-            </button>
-
-            <button
-              type="button"
-              onClick={() => scrollToSection("events")}
-              className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-gray-500 transition hover:bg-white/5 hover:text-white"
-            >
-              <Bell size={17} />
-              Events
-            </button>
-          </nav>
-
-          <div className="border-t border-white/5 p-4">
-            <div className="rounded-xl bg-[#111318] p-4">
-              <div className="flex items-center gap-2">
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    systemNormal
-                      ? "bg-emerald-400"
-                      : "bg-amber-400"
-                  }`}
-                />
-
-                <span className="text-xs font-medium text-gray-300">
-                  System status
-                </span>
-              </div>
-
-              <p
-                className={`mt-2 text-sm font-medium ${
-                  systemNormal
-                    ? "text-emerald-400"
-                    : "text-amber-400"
-                }`}
-              >
-                {systemNormal
-                  ? "Operational"
-                  : "Attention required"}
-              </p>
-            </div>
-          </div>
-        </aside>
-
-        {/* MAIN */}
-        <section className="min-w-0 flex-1">
-
-          {/* HEADER */}
-          <header className="flex min-h-20 flex-wrap items-center justify-between gap-x-3 gap-y-3 border-b border-white/5 px-5 py-3 sm:px-8">
-            <div className="min-w-0">
-              <p className="text-xs uppercase tracking-[0.2em] text-gray-600">
-                Monitoring center
-              </p>
-
-              <h2 className="mt-1 truncate text-lg font-semibold tracking-tight sm:text-xl">
-                Electrical Overview
-              </h2>
-            </div>
-
-            <div className="flex items-center gap-2 sm:gap-3">
-              <div className="hidden items-center gap-2 rounded-full border border-white/5 bg-[#111318] px-3 py-2 text-xs text-gray-400 sm:flex">
-                {refreshing ? (
-                  <Loader2
-                    size={13}
-                    className="animate-spin text-gray-400"
-                  />
-                ) : (
-                  <Radio
-                    size={13}
-                    className={
-                      systemNormal
-                        ? "text-emerald-400"
-                        : "text-amber-400"
-                    }
-                  />
-                )}
-
-                {error
-                  ? "Disconnected"
-                  : refreshing
-                    ? "Updating…"
-                    : "Connected"}
-              </div>
-
-              <div className="flex items-center gap-2 rounded-full border border-white/5 bg-[#111318] px-3 py-2 text-xs text-gray-400">
-                <FlaskConical size={13} className="shrink-0 text-gray-500" />
-
-                <select
-                  aria-label="Simulation mode"
-                  value={currentMode ?? ""}
-                  disabled={modeChanging || currentMode === null}
-                  onChange={handleSimulationModeChange}
-                  className="cursor-pointer bg-transparent text-gray-300 outline-none disabled:cursor-wait"
-                >
-                  {currentMode === null && (
-                    <option value="">
-                      Loading…
-                    </option>
-                  )}
-
-                  {SIMULATION_MODES.map((mode) => (
-                    <option
-                      key={mode.value}
-                      value={mode.value}
-                      className="bg-[#111318]"
-                    >
-                      {mode.label}
-                    </option>
-                  ))}
-                </select>
-
-                {modeChanging && (
-                  <Loader2
-                    size={13}
-                    className="shrink-0 animate-spin text-gray-400"
-                  />
-                )}
-              </div>
-
-              <div className="hidden h-9 w-9 items-center justify-center rounded-full bg-[#1b1e25] sm:flex">
-                <span className="text-xs font-semibold text-gray-300">
-                  NX
-                </span>
-              </div>
-            </div>
-          </header>
-
-          {/* CONTENT */}
-          <div className="space-y-5 p-5 sm:p-8">
 
             {error && (
               <div className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm text-amber-400">
                 <AlertTriangle size={16} />
                 {error}
-              </div>
-            )}
-
-            {modeError && (
-              <div className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm text-amber-400">
-                <AlertTriangle size={16} />
-                {modeError}
               </div>
             )}
 
@@ -1011,10 +734,7 @@ export default function Home() {
               </div>
             </div>
 
-          </div>
-        </section>
-      </div>
-    </main>
+    </div>
   );
 }
 

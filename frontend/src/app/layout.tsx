@@ -2,6 +2,9 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
+import { PreferencesProvider } from "../lib/preferences";
+import { Shell } from "../components/Shell";
+
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
@@ -13,9 +16,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "NEXUS — Electrical Intelligence",
+  title: "NEXUS — Inteligência Elétrica",
   description:
-    "Real-time electrical monitoring dashboard: live telemetry, anomaly diagnostics and event detection.",
+    "Monitoramento elétrico em tempo real: telemetria, diagnósticos de anomalias e detecção de eventos.",
 };
 
 export default function RootLayout({
@@ -25,10 +28,15 @@ export default function RootLayout({
 }) {
   return (
     <html
-      lang="en"
+      lang="pt-BR"
+      data-theme="dark"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full">
+        <PreferencesProvider>
+          <Shell>{children}</Shell>
+        </PreferencesProvider>
+      </body>
     </html>
   );
 }

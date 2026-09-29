@@ -1,7 +1,40 @@
 @import "tailwindcss";
 
-:root {
+/* ------------------------------------------------------------------
+ * Temas via [data-theme] no <html> (preferência em localStorage).
+ * Componentes usam as classes semânticas abaixo, nunca cores fixas.
+ * ------------------------------------------------------------------ */
+:root,
+[data-theme="dark"] {
+  --bg: #090a0d;
+  --surface: #111318;
+  --surface-2: #0c0d10;
+  --surface-3: #1b1e25;
+  --border: rgba(255, 255, 255, 0.08);
+  --text: #ffffff;
+  --muted: #9ca3af;
+  --faint: #6b7280;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --info: #60a5fa;
   color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg: #f3f4f6;
+  --surface: #ffffff;
+  --surface-2: #e9ebef;
+  --surface-3: #e4e7ec;
+  --border: rgba(17, 19, 24, 0.1);
+  --text: #111318;
+  --muted: #5b6472;
+  --faint: #9aa3b0;
+  --ok: #047857;
+  --warn: #b45309;
+  --bad: #dc2626;
+  --info: #2563eb;
+  color-scheme: light;
 }
 
 * {
@@ -9,13 +42,13 @@
 }
 
 html {
-  background: #090a0d;
+  background: var(--bg);
 }
 
 body {
   margin: 0;
-  background: #090a0d;
-  color: #ffffff;
+  background: var(--bg);
+  color: var(--text);
   font-family: Arial, Helvetica, sans-serif;
 }
 
@@ -24,5 +57,93 @@ button {
 }
 
 ::selection {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(128, 128, 128, 0.25);
+}
+
+/* Superfícies */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.density-pad {
+  padding: 1.25rem;
+}
+
+@media (min-width: 640px) {
+  .density-pad {
+    padding: 1.5rem;
+  }
+}
+
+[data-density="compact"] .density-pad {
+  padding: 0.875rem;
+}
+
+/* Texto semântico */
+.text-ink {
+  color: var(--text);
+}
+.text-muted {
+  color: var(--muted);
+}
+.text-faint {
+  color: var(--faint);
+}
+
+.bg-surface-2 {
+  background: var(--surface-2);
+}
+.bg-surface-3 {
+  background: var(--surface-3);
+}
+
+/* Badges de severidade/status */
+.badge-green,
+.badge-blue,
+.badge-amber,
+.badge-red,
+.badge-neutral {
+  border: 1px solid transparent;
+}
+.badge-green {
+  background: color-mix(in srgb, var(--ok) 13%, transparent);
+  color: var(--ok);
+}
+.badge-blue {
+  background: color-mix(in srgb, var(--info) 13%, transparent);
+  color: var(--info);
+}
+.badge-amber {
+  background: color-mix(in srgb, var(--warn) 13%, transparent);
+  color: var(--warn);
+}
+.badge-red {
+  background: color-mix(in srgb, var(--bad) 13%, transparent);
+  color: var(--bad);
+}
+.badge-neutral {
+  background: var(--surface-3);
+  color: var(--muted);
+}
+
+/* Inputs */
+.field {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 0.75rem;
+  padding: 0.625rem 0.875rem;
+  font-size: 0.875rem;
+  min-height: 44px;
+  width: 100%;
+}
+.field:focus {
+  outline: 2px solid var(--info);
+  outline-offset: 1px;
+}
+select.field option {
+  background: var(--surface);
+  color: var(--text);
 }
