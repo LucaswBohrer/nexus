@@ -57,6 +57,8 @@ export interface EventsV1Params {
   q?: string;
   limit?: number;
   cursor?: number;
+  /** NEXUS 2.4: id ou código do equipamento; omitido = DEFAULT. */
+  equipment_id?: number | string | null;
 }
 
 export interface Diagnosis {
@@ -122,6 +124,8 @@ export interface SimulationStartRequest {
   intensity?: number;
   duration_minutes?: number | null;
   anomalies?: string[];
+  /** NEXUS 2.4: id ou código do equipamento; omitido = DEFAULT. */
+  equipment_id?: number | string | null;
 }
 
 export interface SimulationStopResponse extends SimulationStatus {
@@ -309,4 +313,66 @@ export interface AnalyticsOverview {
     total: number;
     open: number;
   };
+}
+
+// ---------------------------------------------------------------------------
+// NEXUS 2.4 — equipment registry
+// ---------------------------------------------------------------------------
+
+/** Status operacional de um equipamento. */
+export type EquipmentStatus = "active" | "inactive" | "maintenance";
+
+/** Registro de um equipamento/fonte de telemetria. */
+export interface Equipment {
+  id: number;
+  code: string;
+  name: string;
+  description: string | null;
+  equipment_type: string | null;
+  location: string | null;
+  status: EquipmentStatus;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Payload de criação (POST /api/v1/equipment). */
+export interface EquipmentCreatePayload {
+  name: string;
+  code?: string | null;
+  description?: string | null;
+  equipment_type?: string | null;
+  location?: string | null;
+  status?: EquipmentStatus;
+  enabled?: boolean;
+}
+
+/** Payload de atualização parcial (PATCH /api/v1/equipment/{id}). */
+export interface EquipmentUpdatePayload {
+  name?: string;
+  code?: string;
+  description?: string | null;
+  equipment_type?: string | null;
+  location?: string | null;
+  status?: EquipmentStatus;
+  enabled?: boolean;
+}
+
+/** Diagnóstico recomputado pelo backend a partir da última leitura real. */
+export interface EquipmentDiagnosis {
+  status: "normal" | "warning" | "critical";
+  severity: NormalizedSeverity;
+  anomalies: string[];
+  recommendations: string[];
+}
+
+/** GET /api/v1/equipment/{id}/summary — tudo de dados reais armazenados. */
+export interface EquipmentSummary {
+  equipment: Equipment;
+  last_reading: ElectricalReading | null;
+  last_reading_at: string | null;
+  diagnosis: EquipmentDiagnosis | null;
+  active_events: number;
+  open_episodes: number;
+  readings_count: number;
 }

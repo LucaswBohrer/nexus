@@ -4,6 +4,10 @@ import type {
   DiagnosticResponse,
   ElectricalReading,
   EpisodesResponse,
+  Equipment,
+  EquipmentCreatePayload,
+  EquipmentSummary,
+  EquipmentUpdatePayload,
   EventsV1Params,
   EventsV1Response,
   HealthResponse,
@@ -106,6 +110,21 @@ function apiFetch(input: RequestInfo | URL, init?: RequestInit) {
 
 function apiUrl(path: string): string {
   return `${getApiBaseUrl()}${path}`;
+}
+
+/**
+ * Anexa `?equipment_id=` à query quando informado. O backend resolve
+ * id ou código; quando omitido, usa o equipamento DEFAULT (compatível
+ * com chamadas anteriores à NEXUS 2.4).
+ */
+function withEquipment(
+  params: URLSearchParams,
+  equipmentId?: number | string | null
+): URLSearchParams {
+  if (equipmentId !== undefined && equipmentId !== null) {
+    params.set("equipment_id", String(equipmentId));
+  }
+  return params;
 }
 
 /**
@@ -221,10 +240,15 @@ export async function startSimulation(
 }
 
 /** Status atual — barato e seguro para polling (fonte de verdade do countdown). */
-export async function getSimulationStatus(): Promise<SimulationStatus> {
-  const response = await apiFetch(apiUrl("/api/v1/simulation/status"), {
-    cache: "no-store",
-  });
+export async function getSimulationStatus(
+  equipmentId?: number | string | null
+): Promise<SimulationStatus> {
+  const params = withEquipment(new URLSearchParams(), equipmentId);
+  const suffix = params.toString();
+  const response = await apiFetch(
+    apiUrl(`/api/v1/simulation/status${suffix ? `?${suffix}` : ""}`),
+    { cache: "no-store" }
+  );
 
   if (!response.ok) {
     throw await parseError(response);
@@ -234,21 +258,36 @@ export async function getSimulationStatus(): Promise<SimulationStatus> {
 }
 
 /** Para a simulação ativa. Idempotente: sem sessão ativa, retorna stopped=false. */
-export async function stopSimulation(): Promise<SimulationStopResponse> {
-  return postJson<SimulationStopResponse>("/api/v1/simulation/stop", {});
+export async function stopSimulation(
+  equipmentId?: number | string | null
+): Promise<SimulationStopResponse> {
+  const params = withEquipment(new URLSearchParams(), equipmentId);
+  const suffix = params.toString();
+  return postJson<SimulationStopResponse>(
+    `/api/v1/simulation/stop${suffix ? `?${suffix}` : ""}`,
+    {}
+  );
 }
 
 /** Volta ao baseline (normal, intensidade 100%, sem timer nem composer). */
-export async function resetSimulation(): Promise<SimulationResetResponse> {
-  return postJson<SimulationResetResponse>("/api/v1/simulation/reset", {});
+export async function resetSimulation(
+  equipmentId?: number | string | null
+): Promise<SimulationResetResponse> {
+  const params = withEquipment(new URLSearchParams(), equipmentId);
+  const suffix = params.toString();
+  return postJson<SimulationResetResponse>(
+    `/api/v1/simulation/reset${suffix ? `?${suffix}` : ""}`,
+    {}
+  );
 }
 
 /** Histórico de sessões, mais recentes primeiro, paginação por cursor de id. */
 export async function getSimulationSessions(
   limit = 20,
-  cursor?: number | null
+  cursor?: number | null,
+  equipmentId?: number | string | null
 ): Promise<SimulationSessionsResponse> {
-  const params = new URLSearchParams({ limit: String(limit) });
+  const params = withEquipment(new URLSearchParams({ limit: String(limit) }), equipmentId);
   if (cursor) {
     params.set("cursor", String(cursor));
   }
@@ -349,10 +388,15 @@ export async function getHealth(): Promise<HealthResponse> {
   return response.json();
 }
 
-export async function getStatsSummary(): Promise<StatsSummary> {
-  const response = await apiFetch(apiUrl("/api/v1/stats/summary"), {
-    cache: "no-store",
-  });
+export async function getStatsSummary(
+  equipmentId?: number | string | null
+): Promise<StatsSummary> {
+  const params = withEquipment(new URLSearchParams(), equipmentId);
+  const suffix = params.toString();
+  const response = await apiFetch(
+    apiUrl(`/api/v1/stats/summary${suffix ? `?${suffix}` : ""}`),
+    { cache: "no-store" }
+  );
 
   if (!response.ok) {
     throw await parseError(response);
@@ -366,13 +410,17 @@ export async function getHistoryBuckets(params: {
   from: string;
   to: string;
   bucket: HistoryBucketSize;
+  equipmentId?: number | string | null;
 }): Promise<HistoryBucket[]> {
-  const query = new URLSearchParams({
-    metric: params.metric,
-    from: params.from,
-    to: params.to,
-    bucket: params.bucket,
-  });
+  const query = withEquipment(
+    new URLSearchParams({
+      metric: params.metric,
+      from: params.from,
+      to: params.to,
+      bucket: params.bucket,
+    }),
+    params.equipmentId
+  );
   const response = await apiFetch(apiUrl(`/api/v1/history?${query}`), {
     cache: "no-store",
   });
@@ -400,6 +448,7 @@ export async function getEventsV1(
     query.set("limit", String(params.limit));
   if (params.cursor !== undefined)
     query.set("cursor", String(params.cursor));
+  withEquipment(query, params.equipment_id);
 
   const suffix = query.toString();
   const response = await apiFetch(
@@ -469,10 +518,15 @@ export async function updateSetting(
 }
 
 export async function getEpisodes(
-  limit = 20
+  limit = 20,
+  equipmentId?: number | string | null
 ): Promise<DiagnosticEpisode[]> {
+  const params = withEquipment(
+    new URLSearchParams({ limit: String(limit) }),
+    equipmentId
+  );
   const response = await apiFetch(
-    apiUrl(`/api/v1/diagnostics/episodes?limit=${limit}`),
+    apiUrl(`/api/v1/diagnostics/episodes?${params.toString()}`),
     { cache: "no-store" }
   );
 
@@ -516,12 +570,16 @@ export async function getHistoryExtremes(params: {
   metric: HistoryMetric;
   from: string;
   to: string;
+  equipmentId?: number | string | null;
 }): Promise<HistoryExtremesResponse> {
-  const query = new URLSearchParams({
-    metric: params.metric,
-    from: params.from,
-    to: params.to,
-  });
+  const query = withEquipment(
+    new URLSearchParams({
+      metric: params.metric,
+      from: params.from,
+      to: params.to,
+    }),
+    params.equipmentId
+  );
   const response = await apiFetch(apiUrl(`/api/v1/history/extremes?${query}`), {
     cache: "no-store",
   });
@@ -536,11 +594,15 @@ export async function getHistoryExtremes(params: {
 export async function getAnalyticsOverview(params: {
   from: string;
   to: string;
+  equipmentId?: number | string | null;
 }): Promise<AnalyticsOverview> {
-  const query = new URLSearchParams({
-    from: params.from,
-    to: params.to,
-  });
+  const query = withEquipment(
+    new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    }),
+    params.equipmentId
+  );
   const response = await apiFetch(
     apiUrl(`/api/v1/analytics/overview?${query}`),
     { cache: "no-store" }
@@ -551,4 +613,126 @@ export async function getAnalyticsOverview(params: {
   }
 
   return response.json();
+}
+
+// ---------------------------------------------------------------------------
+// NEXUS 2.4 — equipment registry
+// ---------------------------------------------------------------------------
+
+/** Lista todos os equipamentos registrados (o DEFAULT detém os dados pré-2.4). */
+export async function listEquipment(): Promise<Equipment[]> {
+  const response = await apiFetch(apiUrl("/api/v1/equipment"), {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  const data: { equipment: Equipment[] } = await response.json();
+  return data.equipment;
+}
+
+/** Um equipamento pelo id. 404 para ids desconhecidos. */
+export async function getEquipment(id: number | string): Promise<Equipment> {
+  const response = await apiFetch(apiUrl(`/api/v1/equipment/${id}`), {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  const data: { equipment: Equipment } = await response.json();
+  return data.equipment;
+}
+
+/** Registra um equipamento. 422 em erros de validação (ex.: código duplicado). */
+export async function createEquipment(
+  body: EquipmentCreatePayload
+): Promise<Equipment> {
+  const data: { equipment: Equipment } = await postJson(
+    "/api/v1/equipment",
+    body
+  );
+  return data.equipment;
+}
+
+/** Atualização parcial (inclui enabled=false para desativação lógica). */
+export async function updateEquipment(
+  id: number | string,
+  body: EquipmentUpdatePayload
+): Promise<Equipment> {
+  const response = await apiFetch(apiUrl(`/api/v1/equipment/${id}`), {
+    method: "PATCH",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  const data: { equipment: Equipment } = await response.json();
+  return data.equipment;
+}
+
+/**
+ * Exclusão física — só para equipamentos sem dados históricos.
+ * 409 para o DEFAULT e para equipamentos com dados; prefira desativar
+ * (PATCH enabled=false) em qualquer caso real.
+ */
+export async function deleteEquipment(id: number | string): Promise<void> {
+  const response = await apiFetch(apiUrl(`/api/v1/equipment/${id}`), {
+    method: "DELETE",
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+}
+
+/**
+ * Resumo do equipamento a partir de dados reais armazenados: identidade,
+ * última leitura, diagnóstico recomputado pela engine, contagens de
+ * eventos ativos, episódios abertos e leituras. 404 para ids desconhecidos.
+ */
+export async function getEquipmentSummary(
+  id: number | string
+): Promise<EquipmentSummary> {
+  const response = await apiFetch(apiUrl(`/api/v1/equipment/${id}/summary`), {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  return response.json();
+}
+
+/**
+ * Diagnóstico + leitura atual de um equipamento, no formato do endpoint
+ * legado /api/monitoring/diagnostics — o endpoint legado não tem escopo
+ * por equipamento, então as páginas usam o summary do equipamento.
+ */
+export async function getEquipmentDiagnosis(
+  equipmentId: number | string
+): Promise<DiagnosticResponse> {
+  const summary = await getEquipmentSummary(equipmentId);
+  if (!summary.last_reading || !summary.diagnosis) {
+    throw new Error("no-data");
+  }
+  return {
+    reading: summary.last_reading,
+    diagnosis: {
+      status: summary.diagnosis.status,
+      severity: summary.diagnosis.severity,
+      anomalies: summary.diagnosis.anomalies,
+      recommendations: summary.diagnosis.recommendations,
+      events: [],
+    },
+  };
 }

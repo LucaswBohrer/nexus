@@ -31,11 +31,15 @@ interface PollResult<T> {
  * Polling de dados com intervalo configurável.
  * `fn` pode ser inline: é guardada em ref para não reiniciar o intervalo.
  * intervalMs <= 0 desliga o polling automático (só carrega uma vez).
+ * `resetKey`: quando muda (ex.: troca de equipamento), recarrega de
+ * imediato e reinicia o intervalo — sem ele, a troca só apareceria no
+ * próximo tick do intervalo.
  */
 export function usePoll<T>(
   fn: () => Promise<T>,
   intervalMs: number,
-  fallbackError: string
+  fallbackError: string,
+  resetKey?: unknown
 ): PollResult<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +85,8 @@ export function usePoll<T>(
     }
     const id = setInterval(refresh, intervalMs);
     return () => clearInterval(id);
-  }, [refresh, intervalMs]);
+    // resetKey recarrega imediatamente na troca (ex.: de equipamento).
+  }, [refresh, intervalMs, resetKey]);
 
   return { data, error, unauthorized, loading, refresh };
 }
