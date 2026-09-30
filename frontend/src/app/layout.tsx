@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
 import { PreferencesProvider } from "../lib/preferences";
+import { EquipmentProvider } from "../lib/equipment";
 import { Shell } from "../components/Shell";
 
 const geistSans = Geist({
@@ -43,7 +44,9 @@ export default function RootLayout({
       </head>
       <body className="min-h-full">
         <PreferencesProvider>
-          <Shell>{children}</Shell>
+          <EquipmentProvider>
+            <Shell>{children}</Shell>
+          </EquipmentProvider>
         </PreferencesProvider>
       </body>
     </html>

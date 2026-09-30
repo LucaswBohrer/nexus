@@ -13,6 +13,7 @@ import {
   Loader2,
   MoreHorizontal,
   Radio,
+  Server,
   Settings,
   ShieldCheck,
   Stethoscope,
@@ -22,6 +23,7 @@ import {
 
 import { getDiagnostics } from "../lib/api";
 import { usePreferences } from "../lib/preferences";
+import { EquipmentSelector } from "./EquipmentSelector";
 
 interface NavItem {
   href: string;
@@ -40,6 +42,7 @@ function useNavItems(): NavItem[] {
     { href: "/analytics", label: t.nav.analytics, icon: BarChart3 },
     { href: "/simulation", label: t.nav.simulation, icon: FlaskConical },
     { href: "/reports", label: t.nav.reports, icon: FileText },
+    { href: "/equipment", label: t.nav.equipment, icon: Server },
     { href: "/system", label: t.nav.system, icon: ShieldCheck },
     { href: "/settings", label: t.nav.settings, icon: Settings },
   ];
@@ -126,6 +129,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
 
+        {/* SELETOR DE EQUIPAMENTO — desktop (contexto global NEXUS 2.4) */}
+        <div className="border-b border-[var(--border)] px-4 py-3">
+          <p className="mb-2 px-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-faint">
+            {t.equipment.current}
+          </p>
+          <EquipmentSelector />
+        </div>
+
         <nav className="flex-1 overflow-y-auto px-4 py-6">
           <p className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-faint">
             {t.nav.sectionMonitoring}
@@ -205,6 +216,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   : t.status.connected}
               </span>
             </div>
+          </div>
+
+          {/* SELETOR DE EQUIPAMENTO — mobile (contexto global NEXUS 2.4) */}
+          <div className="border-t border-[var(--border)] px-4 py-2 lg:hidden">
+            <EquipmentSelector compact />
           </div>
         </header>
 
