@@ -21,7 +21,8 @@ import {
   Zap,
 } from "lucide-react";
 
-import { getDiagnostics } from "../lib/api";
+import { getDiagnostics, getEquipmentDiagnosis } from "../lib/api";
+import { useEquipment } from "../lib/equipment";
 import { usePreferences } from "../lib/preferences";
 import { EquipmentSelector } from "./EquipmentSelector";
 
@@ -67,26 +68,36 @@ function isActive(pathname: string, href: string): boolean {
 export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { t } = usePreferences();
+  const { equipmentId } = useEquipment();
   const items = useNavItems();
 
   const [systemNormal, setSystemNormal] = useState<boolean | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
 
-  // Status geral para o rodapé da sidebar + pílula de conexão.
+  // Status geral escopado ao equipamento selecionado (NEXUS 2.4).
   // Poll leve (30 s); as páginas fazem seu próprio polling de dados.
   useEffect(() => {
     let cancelled = false;
     async function poll() {
       try {
-        const data = await getDiagnostics();
+        const data =
+          equipmentId === null
+            ? await getDiagnostics()
+            : await getEquipmentDiagnosis(equipmentId);
         if (!cancelled) {
           setSystemNormal(data.diagnosis.status === "normal");
           setConnected(true);
         }
-      } catch {
+      } catch (err) {
         if (!cancelled) {
-          setConnected(false);
+          // Sem leituras: API alcançável, mas sem diagnóstico para o equipamento.
+          if (err instanceof Error && err.message === "no-data") {
+            setSystemNormal(null);
+            setConnected(true);
+          } else {
+            setConnected(false);
+          }
         }
       }
     }
@@ -96,7 +107,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       cancelled = true;
       clearInterval(id);
     };
-  }, []);
+  }, [equipmentId]);
 
   // O menu "Mais" fecha ao tocar em um link (onClick abaixo) ou
   // no backdrop — sem setState dentro de effect.
@@ -109,7 +120,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
       ? "bg-[var(--bad)]"
       : systemNormal === false
         ? "bg-[var(--warn)]"
-        : "bg-[var(--ok)]";
+        : systemNormal === null
+          ? "bg-[var(--faint)]"
+          : "bg-[var(--ok)]";
 
   return (
     <div className="min-h-screen">
@@ -180,7 +193,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 ? t.status.disconnected
                 : systemNormal === false
                   ? t.status.attentionNeeded
-                  : t.status.operational}
+                  : systemNormal === null
+                    ? t.common.noData
+                    : t.status.operational}
             </p>
           </div>
         </div>

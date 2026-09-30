@@ -66,13 +66,17 @@ function QuickLink({
 }) {
   const router = useRouter();
   const { select } = useEquipment();
+  const target = href.includes("?")
+    ? `${href}&equipment_id=${equipmentId}`
+    : `${href}?equipment_id=${equipmentId}`;
   return (
     <button
       type="button"
       onClick={() => {
-        // O destino abre já com este equipamento selecionado.
+        // O destino abre já com este equipamento selecionado; a query
+        // garante o deep link mesmo após refresh.
         select(equipmentId);
-        router.push(href);
+        router.push(target);
       }}
       className="flex min-h-[52px] items-center gap-3 rounded-2xl bg-surface-2 px-4 text-left transition hover:bg-surface-3"
     >
@@ -152,6 +156,7 @@ export default function EquipmentDetailPage({
   const [episodes, setEpisodes] = useState<DiagnosticEpisode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -203,7 +208,7 @@ export default function EquipmentDetailPage({
     return () => {
       cancelled = true;
     };
-  }, [equipmentId, t]);
+  }, [equipmentId, reloadKey, t]);
 
   const isCurrent = selectedId === equipmentId;
   const diagnosis = summary?.diagnosis;
@@ -250,8 +255,7 @@ export default function EquipmentDetailPage({
         <ErrorBanner
           message={error}
           onRetry={() => {
-            setLoading(true);
-            setError(null);
+            setReloadKey((k) => k + 1);
           }}
         />
       )}
@@ -387,7 +391,7 @@ export default function EquipmentDetailPage({
                 title={`${t.equipment.activeEvents} · ${summary.active_events}`}
                 action={
                   <Link
-                    href="/events"
+                    href={`/events?equipment_id=${equipment.id}`}
                     onClick={() => select(equipment.id)}
                     className="flex min-h-[44px] items-center gap-1 rounded-lg px-2 text-xs font-medium text-[var(--info)]"
                   >
@@ -431,7 +435,7 @@ export default function EquipmentDetailPage({
                 title={`${t.equipment.openEpisodes} · ${summary.open_episodes}`}
                 action={
                   <Link
-                    href="/diagnostics"
+                    href={`/diagnostics?equipment_id=${equipment.id}`}
                     onClick={() => select(equipment.id)}
                     className="flex min-h-[44px] items-center gap-1 rounded-lg px-2 text-xs font-medium text-[var(--info)]"
                   >

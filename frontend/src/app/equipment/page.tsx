@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Pencil,
   Plus,
@@ -16,15 +16,18 @@ import {
   ApiError,
   createEquipment,
   deleteEquipment,
+  getEquipmentSummary,
   updateEquipment,
 } from "../../lib/api";
 import { useEquipment } from "../../lib/equipment";
 import { usePreferences } from "../../lib/preferences";
+import { formatDateTime, formatNumber } from "../../lib/format";
 import { errorMessage } from "../../lib/usePoll";
 import type {
   Equipment,
   EquipmentCreatePayload,
   EquipmentStatus,
+  EquipmentSummary,
   EquipmentUpdatePayload,
 } from "../../types/monitoring";
 import {
@@ -410,7 +413,7 @@ function DeleteConfirm({
 }
 
 export default function EquipmentPage() {
-  const { t } = usePreferences();
+  const { t, preferences } = usePreferences();
   const { equipments, loading, error, refresh, select, equipmentId } =
     useEquipment();
 
@@ -419,6 +422,35 @@ export default function EquipmentPage() {
   const [deleting, setDeleting] = useState<Equipment | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [toggling, setToggling] = useState<number | null>(null);
+  const [summaries, setSummaries] = useState<
+    Record<number, EquipmentSummary>
+  >({});
+
+  // Última leitura por equipamento (dados reais do summary). Sem isso,
+  // a lista não mostraria o estado atual de cada fonte.
+  useEffect(() => {
+    if (equipments.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    void Promise.allSettled(
+      equipments.map((item) => getEquipmentSummary(item.id))
+    ).then((results) => {
+      if (cancelled) {
+        return;
+      }
+      const map: Record<number, EquipmentSummary> = {};
+      results.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          map[equipments[index].id] = result.value;
+        }
+      });
+      setSummaries(map);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [equipments]);
 
   function openCreate() {
     setEditing(null);
@@ -488,6 +520,8 @@ export default function EquipmentPage() {
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {equipments.map((item) => {
             const isCurrent = item.id === equipmentId;
+            const summary = summaries[item.id];
+            const last = summary?.last_reading ?? null;
             return (
               <Card key={item.id}>
                 <div className="flex items-start justify-between gap-2">
@@ -529,6 +563,33 @@ export default function EquipmentPage() {
                     {t.equipment.type}: {item.equipment_type}
                   </p>
                 )}
+
+                <div className="mt-3 rounded-xl bg-surface-2 px-4 py-3">
+                  <p className="text-[11px] uppercase tracking-wider text-faint">
+                    {t.equipment.lastReading}
+                  </p>
+                  {!summary ? (
+                    <p className="mt-1 text-xs text-faint">
+                      {t.common.loading}
+                    </p>
+                  ) : last ? (
+                    <>
+                      <p className="mt-1 text-sm font-semibold text-ink">
+                        {formatNumber(last.voltage, 1)} V ·{" "}
+                        {formatNumber(last.current, 1)} A ·{" "}
+                        {formatNumber(last.active_power, 2)} kW
+                      </p>
+                      <p className="mt-0.5 text-xs text-faint">
+                        {t.common.lastUpdate}:{" "}
+                        {formatDateTime(last.timestamp, preferences)}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="mt-1 text-xs text-faint">
+                      {t.equipment.noLastReading}
+                    </p>
+                  )}
+                </div>
 
                 <div className="mt-4 grid grid-cols-2 gap-2">
                   <Link

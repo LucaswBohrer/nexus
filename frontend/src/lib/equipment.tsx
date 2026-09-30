@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Suspense,
   createContext,
   useCallback,
   useContext,
@@ -9,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { listEquipment } from "./api";
 import type { Equipment } from "../types/monitoring";
@@ -60,6 +62,37 @@ function persistId(id: number) {
   } catch {
     // Armazenamento indisponível: segue sem persistir.
   }
+}
+
+/**
+ * Sincroniza deep links `?equipment_id=` com a seleção global.
+ *
+ * Aceita id numérico ou código (o backend resolve ambos). Sem o
+ * parâmetro, mantém a seleção atual (localStorage/DEFAULT). Parâmetros
+ * inválidos são ignorados.
+ */
+function EquipmentQuerySync() {
+  const searchParams = useSearchParams();
+  const { equipments, equipmentId, select, loading } = useEquipment();
+  const param = searchParams.get("equipment_id");
+
+  useEffect(() => {
+    if (loading || !param) {
+      return;
+    }
+    const numeric = Number(param);
+    const byId =
+      Number.isFinite(numeric) && numeric > 0
+        ? equipments.find((e) => e.id === numeric)
+        : undefined;
+    const target = byId ?? equipments.find((e) => e.code === param);
+    if (target && target.id !== equipmentId) {
+      // Sincronização pontual com a URL (sistema externo), não com render.
+      select(target.id);
+    }
+  }, [param, equipments, loading, equipmentId, select]);
+
+  return null;
 }
 
 export function EquipmentProvider({
@@ -131,6 +164,9 @@ export function EquipmentProvider({
 
   return (
     <EquipmentContext.Provider value={value}>
+      <Suspense fallback={null}>
+        <EquipmentQuerySync />
+      </Suspense>
       {children}
     </EquipmentContext.Provider>
   );
