@@ -30,6 +30,7 @@ sys.path.insert(0, BACKEND_DIR)
 BASE_URL = "http://127.0.0.1:8151"
 
 from app.database import database  # noqa: E402
+from app.services import equipment as equipment_service  # noqa: E402
 
 
 def _http_get_raw(path: str):
@@ -76,6 +77,9 @@ class ReportsTest(unittest.TestCase):
         database.DB_PATH = cls.db_path
         try:
             database.init_database()
+            # NEXUS 2.4: fixture rows are stamped with the DEFAULT
+            # equipment, like real pre-2.4 data after the v4 backfill.
+            default_id = equipment_service.get_default_equipment()["id"]
             conn = sqlite3.connect(cls.db_path)
             try:
                 for i in range(10):
@@ -83,11 +87,11 @@ class ReportsTest(unittest.TestCase):
                     conn.execute(
                         """INSERT INTO electrical_readings
                            (timestamp, voltage, current, frequency,
-                            power_factor, active_power, temperature, status)
-                           VALUES (?, ?, 12.0, 60.0, 0.93, ?, ?,
-                                   ?)""",
+                            power_factor, active_power, temperature, status,
+                            equipment_id)
+                           VALUES (?, ?, 12.0, 60.0, 0.93, ?, ?, ?, ?)""",
                         (ts, cls.voltages[i], cls.powers[i], cls.temps[i],
-                         "warning" if i % 3 == 0 else "normal"),
+                         "warning" if i % 3 == 0 else "normal", default_id),
                     )
                 events = [
                     ("HIGH_VOLTAGE", "warning", "open"),
@@ -99,17 +103,19 @@ class ReportsTest(unittest.TestCase):
                         """INSERT INTO monitoring_events
                            (timestamp, event_type, severity, message,
                             recommendation, status, opened_at, occurrences,
-                            last_value, threshold)
-                           VALUES (?, ?, ?, 'm', 'r', ?, ?, 1, 250.0, 242.0)""",
-                        (ts, etype, severity, status, ts),
+                            last_value, threshold, equipment_id)
+                           VALUES (?, ?, ?, 'm', 'r', ?, ?, 1, 250.0, 242.0,
+                                   ?)""",
+                        (ts, etype, severity, status, ts, default_id),
                     )
                 ts = _iso(cls.t0)
                 conn.execute(
                     """INSERT INTO diagnostic_episodes
                        (started_at, status, severity, rules,
-                        peak_values, recommendations)
-                       VALUES (?, 'resolved', 'warning', '[]', '{}', '[]')""",
-                    (ts,),
+                        peak_values, recommendations, equipment_id)
+                       VALUES (?, 'resolved', 'warning', '[]', '{}', '[]',
+                               ?)""",
+                    (ts, default_id),
                 )
                 conn.commit()
             finally:

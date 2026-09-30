@@ -26,6 +26,7 @@ sys.path.insert(0, BACKEND_DIR)
 BASE_URL = "http://127.0.0.1:8149"
 
 from app.database import database  # noqa: E402
+from app.services import equipment as equipment_service  # noqa: E402
 
 
 def _http_get(path: str):
@@ -60,15 +61,20 @@ class HistoryExtremesTest(unittest.TestCase):
         database.DB_PATH = cls.db_path
         try:
             database.init_database()
+            # NEXUS 2.4: fixture rows are stamped with the DEFAULT
+            # equipment, like real pre-2.4 data after the v4 backfill.
+            default_id = equipment_service.get_default_equipment()["id"]
             conn = sqlite3.connect(cls.db_path)
             try:
                 for (voltage, current), ts in zip(cls.samples, cls.timestamps):
                     conn.execute(
                         """INSERT INTO electrical_readings
                            (timestamp, voltage, current, frequency,
-                            power_factor, active_power, temperature, status)
-                           VALUES (?, ?, ?, 60.0, 0.93, 2.5, 42.0, 'normal')""",
-                        (ts, voltage, current),
+                            power_factor, active_power, temperature, status,
+                            equipment_id)
+                           VALUES (?, ?, ?, 60.0, 0.93, 2.5, 42.0, 'normal',
+                                   ?)""",
+                        (ts, voltage, current, default_id),
                     )
                 conn.commit()
             finally:

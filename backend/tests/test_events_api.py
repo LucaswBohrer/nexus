@@ -28,6 +28,7 @@ sys.path.insert(0, BACKEND_DIR)
 BASE_URL = "http://127.0.0.1:8140"
 
 from app.database import database  # noqa: E402
+from app.services import equipment as equipment_service  # noqa: E402
 from app.services.events import process_tick_events  # noqa: E402
 
 
@@ -103,22 +104,28 @@ class EventsApiTest(unittest.TestCase):
             raise RuntimeError("test server did not start in time")
 
         # Seed three known events directly into the server's database file.
+        # NEXUS 2.4: seeded under the DEFAULT equipment so the API's
+        # omitted-equipment scoping finds them.
         database.DB_PATH = cls.db_path
         database.init_database()
+        cls.default_id = equipment_service.get_default_equipment()["id"]
         t0 = datetime.now(timezone.utc)
         process_tick_events(
             [_event("HIGH_VOLTAGE", "warning", "voltage spike on phase A")],
             now=t0,
+            equipment_id=cls.default_id,
         )
         process_tick_events(
             [_event("HIGH_TEMPERATURE", "critical", "motor overheating")],
             now=t0 + timedelta(seconds=1),
+            equipment_id=cls.default_id,
         )
         # Resolve the first event so we have every status present.
         for i in range(2, 8):
             process_tick_events(
                 [_event("HIGH_TEMPERATURE", "critical", "motor overheating")],
                 now=t0 + timedelta(seconds=i),
+                equipment_id=cls.default_id,
             )
         conn = sqlite3.connect(cls.db_path)
         cls.ids = {
@@ -145,7 +152,8 @@ class EventsApiTest(unittest.TestCase):
         # (HIGH_VOLTAGE stays resolved: re-firing it would open a new one.)
         database.DB_PATH = self.db_path
         process_tick_events(
-            [_event("HIGH_TEMPERATURE", "critical", "motor overheating")]
+            [_event("HIGH_TEMPERATURE", "critical", "motor overheating")],
+            equipment_id=self.default_id,
         )
 
     def test_list_latest_first_with_cursor(self):
