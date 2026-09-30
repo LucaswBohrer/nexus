@@ -223,17 +223,20 @@ def prune_all(retention: dict[str, int] | None = None) -> dict[str, int]:
     return counts
 
 
-def get_latest_reading_from_db() -> dict | None:
+def get_latest_reading_from_db(equipment_id: int | None = None) -> dict | None:
+    """Latest stored reading, optionally scoped to one equipment."""
     connection = get_connection()
-    row = connection.execute(
-        """
+    query = """
         SELECT id, timestamp, voltage, current, frequency,
-               power_factor, active_power, temperature, status
+               power_factor, active_power, temperature, status, equipment_id
         FROM electrical_readings
-        ORDER BY id DESC
-        LIMIT 1
-        """
-    ).fetchone()
+    """
+    params: tuple = ()
+    if equipment_id is not None:
+        query += " WHERE equipment_id = ?"
+        params = (equipment_id,)
+    query += " ORDER BY id DESC LIMIT 1"
+    row = connection.execute(query, params).fetchone()
     connection.close()
 
     if row:
@@ -249,15 +252,19 @@ def get_latest_reading_from_db() -> dict | None:
 
 
 def save_reading(reading: dict):
+    """Persist a telemetry reading. The reading may carry an
+    ``equipment_id`` (stamped by the telemetry tick since NEXUS 2.4);
+    when absent the row keeps NULL equipment_id, which the v4
+    migration owns by backfilling to the DEFAULT equipment."""
     connection = get_connection()
 
     connection.execute(
         """
         INSERT INTO electrical_readings (
             timestamp, voltage, current, frequency,
-            power_factor, active_power, temperature, status
+            power_factor, active_power, temperature, status, equipment_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             reading["timestamp"].isoformat(),
@@ -268,6 +275,7 @@ def save_reading(reading: dict):
             reading["active_power"],
             reading["temperature"],
             reading["status"],
+            reading.get("equipment_id"),
         ),
     )
 
@@ -275,22 +283,23 @@ def save_reading(reading: dict):
     connection.close()
 
 
-def get_recent_readings(limit: int = 50):
+def get_recent_readings(limit: int = 50, equipment_id: int | None = None):
     # Defense in depth: never allow an unbounded read even if the caller
     # skipped validation (the API layer rejects out-of-range values with 422).
     limit = max(1, min(limit, MAX_HISTORY_LIMIT))
     connection = get_connection()
 
-    rows = connection.execute(
-        """
+    query = """
         SELECT id, timestamp, voltage, current, frequency,
-               power_factor, active_power, temperature, status
+               power_factor, active_power, temperature, status, equipment_id
         FROM electrical_readings
-        ORDER BY id DESC
-        LIMIT ?
-        """,
-        (limit,),
-    ).fetchall()
+    """
+    params: tuple = (limit,)
+    if equipment_id is not None:
+        query += " WHERE equipment_id = ?"
+        params = (equipment_id, limit)
+    query += " ORDER BY id DESC LIMIT ?"
+    rows = connection.execute(query, params).fetchall()
 
     connection.close()
     return [dict(row) for row in reversed(rows)]

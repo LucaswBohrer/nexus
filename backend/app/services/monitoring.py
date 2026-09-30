@@ -12,6 +12,7 @@ from app.database.database import (
 from app.engine.diagnostics import analyze_reading
 from app.engine.simulator import simulator
 from app.services import simulation as simulation_service
+from app.services import equipment as equipment_service
 from app.services.errors import record_error
 from app.services.events import process_tick_events
 from app.services.episodes import process_tick_episode
@@ -68,9 +69,17 @@ class TelemetryService:
         # auto-revert work with no frontend connected.
         simulation_service.check_expiry()
 
+        # NEXUS 2.4: the tick owns exactly one equipment — the active
+        # simulation's equipment, or DEFAULT when idle. Every row this
+        # tick writes (reading, events, episode) is stamped with it.
+        equipment_id = simulation_service.get_active_equipment_id()
+        if equipment_id is None:
+            equipment_id = equipment_service.get_default_equipment()["id"]
+
         reading = simulator.generate_reading()
         diagnosis = analyze_reading(reading)
         reading["status"] = diagnosis["status"]
+        reading["equipment_id"] = equipment_id
 
         save_reading(reading)
 
@@ -80,11 +89,13 @@ class TelemetryService:
         # NEXUS 2.1: events have a lifecycle (open -> resolved) with
         # deduplication per condition. A sustained anomaly produces ONE
         # event row, not one row per tick.
-        process_tick_events(diagnosis["events"])
+        for event in diagnosis["events"]:
+            event["equipment_id"] = equipment_id
+        process_tick_events(diagnosis["events"], equipment_id=equipment_id)
 
         # NEXUS 2.1 §14: track the whole-system diagnostic episode for
         # this abnormal period (open/update/close).
-        process_tick_episode(diagnosis, reading)
+        process_tick_episode(diagnosis, reading, equipment_id=equipment_id)
 
         self._latest_reading = reading
         self._latest_diagnosis = {

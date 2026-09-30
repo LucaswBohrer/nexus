@@ -40,42 +40,78 @@ STATUSES = ("open", "acknowledged", "resolved")
 SEVERITIES = ("info", "warning", "critical")
 
 
-def event_identity(event: dict[str, Any]) -> tuple[str, Any]:
-    """Deduplication key for a condition: (event_type, equipment_id)."""
-    return (event["event_type"], event.get("equipment_id"))
+def _normalize_equipment_id(value: Any) -> int | None:
+    """Normalize an equipment reference to an int id.
+
+    Needed because ``monitoring_events.equipment_id`` is a TEXT column
+    (since v1) while the rest of NEXUS 2.4 passes integer ids. Returns
+    None for missing/unparseable values (legacy rows).
+    """
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def event_identity(event: dict[str, Any]) -> tuple[str, int | None]:
+    """Deduplication key for a condition: (event_type, equipment_id).
+
+    NEXUS 2.4: the same condition can fire on several equipments and
+    each one is an independent event row.
+    """
+    return (
+        event["event_type"],
+        _normalize_equipment_id(event.get("equipment_id")),
+    )
 
 
 def process_tick_events(
     diagnosis_events: list[dict[str, Any]],
     now: datetime | None = None,
+    equipment_id: int | None = None,
 ) -> None:
     """Apply the lifecycle rules for one telemetry tick.
 
     `diagnosis_events` are the firing conditions from analyze_reading().
     `now` is injectable for deterministic tests; defaults to UTC now.
+
+    NEXUS 2.4: the caller stamps every event with the tick's
+    equipment_id (``equipment_id`` is a fallback for legacy callers).
+    Event aging is scoped to that equipment: a tick for equipment A
+    never ages or resolves events belonging to equipment B.
     """
     now_iso = (now or datetime.now(timezone.utc)).isoformat()
+    tick_equipment = _normalize_equipment_id(equipment_id)
+    for event in diagnosis_events:
+        stamped = _normalize_equipment_id(event.get("equipment_id"))
+        event["equipment_id"] = (
+            stamped if stamped is not None else tick_equipment
+        )
     firing = {event_identity(event) for event in diagnosis_events}
 
     connection = get_connection()
     try:
         for event in diagnosis_events:
             _upsert_firing_event(connection, event, now_iso)
-        _age_absent_events(connection, firing, now_iso)
+        _age_absent_events(connection, firing, now_iso, tick_equipment)
         connection.commit()
     finally:
         connection.close()
 
 
 def _find_active_event(
-    connection, event_type: str, equipment_id: Any
+    connection, event_type: str, equipment_id: int | None
 ) -> Any | None:
-    # equipment_id is NULL today; COALESCE makes NULL = NULL comparisons work
-    # and keeps the query correct once per-equipment ids exist.
+    # equipment_id is a TEXT column (v1) holding integer ids; CAST makes
+    # the comparison type-safe. NULL equipment (legacy rows) matches
+    # only NULL, via the -1 sentinel.
     return connection.execute(
         """SELECT id FROM monitoring_events
            WHERE event_type = ?
-             AND COALESCE(equipment_id, '') = COALESCE(?, '')
+             AND CAST(COALESCE(equipment_id, -1) AS INTEGER)
+                 = CAST(COALESCE(?, -1) AS INTEGER)
              AND status IN ('open', 'acknowledged')
            LIMIT 1""",
         (event_type, equipment_id),
@@ -127,15 +163,36 @@ def _upsert_firing_event(connection, event: dict[str, Any], now_iso: str) -> Non
 
 
 def _age_absent_events(
-    connection, firing: set[tuple[str, Any]], now_iso: str
+    connection,
+    firing: set[tuple[str, int | None]],
+    now_iso: str,
+    tick_equipment_id: int | None,
 ) -> None:
-    rows = connection.execute(
-        """SELECT id, event_type, equipment_id, normal_streak
-           FROM monitoring_events
-           WHERE status IN ('open', 'acknowledged')"""
-    ).fetchall()
+    # NEXUS 2.4: aging is scoped to the tick's equipment. A tick for
+    # equipment A must not touch events of equipment B. When the tick
+    # carries no equipment (legacy callers), only legacy NULL-equipment
+    # rows are aged, preserving the pre-2.4 behaviour.
+    if tick_equipment_id is None:
+        query = (
+            "SELECT id, event_type, equipment_id, normal_streak"
+            " FROM monitoring_events"
+            " WHERE status IN ('open', 'acknowledged')"
+            " AND equipment_id IS NULL"
+        )
+        rows = connection.execute(query).fetchall()
+    else:
+        rows = connection.execute(
+            """SELECT id, event_type, equipment_id, normal_streak
+               FROM monitoring_events
+               WHERE status IN ('open', 'acknowledged')
+                 AND CAST(equipment_id AS INTEGER) = ?""",
+            (tick_equipment_id,),
+        ).fetchall()
     for row in rows:
-        identity = (row["event_type"], row["equipment_id"])
+        identity = (
+            row["event_type"],
+            _normalize_equipment_id(row["equipment_id"]),
+        )
         if identity in firing:
             continue
         streak = (row["normal_streak"] or 0) + 1
@@ -199,6 +256,7 @@ def list_events(
     q: str | None = None,
     limit: int = 50,
     cursor: int | None = None,
+    equipment_id: int | None = None,
 ) -> tuple[list[dict[str, Any]], int | None]:
     """List events, latest first, with optional filters and id-cursor paging.
 
@@ -236,6 +294,11 @@ def list_events(
     if cursor is not None:
         conditions.append("id < ?")
         params.append(cursor)
+    if equipment_id is not None:
+        # equipment_id is a TEXT column holding integer ids; CAST makes
+        # the comparison type-safe.
+        conditions.append("CAST(equipment_id AS INTEGER) = ?")
+        params.append(equipment_id)
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     connection = get_connection()
@@ -251,7 +314,16 @@ def list_events(
     finally:
         connection.close()
 
-    items = [dict(row) for row in rows[:limit]]
+    items = []
+    for row in rows[:limit]:
+        item = dict(row)
+        # NEXUS 2.4: the column has TEXT affinity, but the public
+        # contract is an integer equipment id (None only for legacy
+        # rows that predate equipment stamping).
+        item["equipment_id"] = _normalize_equipment_id(
+            item.get("equipment_id")
+        )
+        items.append(item)
     next_cursor = items[-1]["id"] if len(rows) > limit else None
     return items, next_cursor
 
