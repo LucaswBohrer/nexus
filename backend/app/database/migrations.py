@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 # Bump this when a new migration is added to _MIGRATIONS.
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 # ---------------------------------------------------------------------------
 # Timestamp policy (NEXUS 2.1)
@@ -226,8 +226,103 @@ def _migrate_v3(connection) -> None:
     connection.commit()
 
 
+def _migrate_v4(connection):
+    """NEXUS 2.4 equipment registry.
+
+    Creates the ``equipment`` table, adds ``equipment_id`` to the three
+    data tables that lacked it (``monitoring_events`` already had the
+    column since v1), seeds the deterministic ``DEFAULT`` equipment and
+    backfills every existing row to it.
+
+    Re-runs are no-ops: DDL is guarded, the DEFAULT seed uses
+    ``WHERE NOT EXISTS`` and the backfill only touches NULL rows.
+    """
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS equipment (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            equipment_type TEXT,
+            location TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    # monitoring_events already has equipment_id (TEXT) since v1; the
+    # other three data tables gain an INTEGER column here.
+    for table in (
+        "electrical_readings",
+        "diagnostic_episodes",
+        "simulation_sessions",
+    ):
+        if "equipment_id" not in _existing_columns(connection, table):
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN equipment_id INTEGER"
+            )
+
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_readings_equipment_ts"
+        " ON electrical_readings(equipment_id, timestamp)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_events_equipment"
+        " ON monitoring_events(equipment_id, opened_at)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_episodes_equipment"
+        " ON diagnostic_episodes(equipment_id, started_at)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_equipment"
+        " ON simulation_sessions(equipment_id, id)"
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+    connection.execute(
+        """
+        INSERT INTO equipment (
+            code, name, description, equipment_type, location,
+            status, enabled, created_at, updated_at
+        )
+        SELECT ?, ?, ?, ?, ?, 'active', 1, ?, ?
+        WHERE NOT EXISTS (SELECT 1 FROM equipment WHERE code = ?)
+        """,
+        (
+            "DEFAULT",
+            "Main Electrical System",
+            "Default installation monitored before NEXUS 2.4",
+            "electrical_panel",
+            None,
+            now,
+            now,
+            "DEFAULT",
+        ),
+    )
+
+    # Every pre-2.4 row belongs to the equipment that has always been
+    # there: DEFAULT. Only NULL rows are touched, so re-runs are no-ops.
+    default_id_sql = "(SELECT id FROM equipment WHERE code = 'DEFAULT')"
+    for table in (
+        "electrical_readings",
+        "monitoring_events",
+        "diagnostic_episodes",
+        "simulation_sessions",
+    ):
+        connection.execute(
+            f"UPDATE {table} SET equipment_id = {default_id_sql}"
+            " WHERE equipment_id IS NULL"
+        )
+
+    connection.commit()
+
+
 _MIGRATIONS = {
     1: _migrate_v1,
     2: _migrate_v2,
     3: _migrate_v3,
+    4: _migrate_v4,
 }
