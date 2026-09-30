@@ -15,6 +15,7 @@ from typing import Any, Iterator
 from app.database.database import get_connection
 from app.services.aggregation import (
     AggregationError,
+    _equipment_filter,
     get_analytics_overview,
     parse_bound,
     validate_range,
@@ -76,33 +77,38 @@ def parse_week_param(value: str) -> tuple[datetime, datetime]:
 
 
 def get_report_summary(
-    from_dt: datetime, to_dt: datetime
+    from_dt: datetime, to_dt: datetime, equipment_id: int | None = None
 ) -> dict[str, Any]:
     """Full JSON report for a period.
 
     The numeric summary comes straight from get_analytics_overview() --
     the same function behind /api/v1/analytics/overview -- so reports
-    and analytics can never disagree.
+    and analytics can never disagree. NEXUS 2.4: optionally scoped to
+    one equipment.
     """
     validate_range(from_dt, to_dt)
-    overview = get_analytics_overview(from_dt, to_dt)
+    overview = get_analytics_overview(
+        from_dt, to_dt, equipment_id=equipment_id
+    )
     per_metric = overview["per_metric"]
+    equipment_sql, equipment_params = _equipment_filter(equipment_id)
 
     connection = get_connection()
     try:
         status_rows = connection.execute(
-            """SELECT status, COUNT(*) FROM electrical_readings
-               WHERE timestamp >= ? AND timestamp < ?
+            f"""SELECT status, COUNT(*) FROM electrical_readings
+               WHERE timestamp >= ? AND timestamp < ?{equipment_sql}
                GROUP BY status""",
-            (overview["from"], overview["to"]),
+            (overview["from"], overview["to"], *equipment_params),
         ).fetchall()
         episode_rows = connection.execute(
-            """SELECT id, started_at, ended_at, status, severity,
-                      rules, peak_values, recommendations
+            f"""SELECT id, started_at, ended_at, status, severity,
+                      rules, peak_values, recommendations, equipment_id
                FROM diagnostic_episodes
-               WHERE started_at >= ? AND started_at < ?
+               WHERE started_at >= ? AND started_at < ?{equipment_sql}
                ORDER BY id DESC LIMIT ?""",
-            (overview["from"], overview["to"], MAX_REPORT_EPISODES),
+            (overview["from"], overview["to"], *equipment_params,
+             MAX_REPORT_EPISODES),
         ).fetchall()
     finally:
         connection.close()
@@ -113,7 +119,10 @@ def get_report_summary(
             status_counts[status] = count
 
     events, _ = list_events(
-        from_dt=from_dt, to_dt=to_dt, limit=MAX_REPORT_EVENTS
+        from_dt=from_dt,
+        to_dt=to_dt,
+        limit=MAX_REPORT_EVENTS,
+        equipment_id=equipment_id,
     )
     episodes = [dict(row) for row in episode_rows]
 
@@ -147,20 +156,25 @@ def _csv_chunk(rows: list[tuple]) -> bytes:
 
 
 def iter_readings_csv(
-    from_dt: datetime, to_dt: datetime, batch: int = 1000
+    from_dt: datetime,
+    to_dt: datetime,
+    batch: int = 1000,
+    equipment_id: int | None = None,
 ) -> Iterator[bytes]:
-    """Stream readings as CSV. Only one batch is ever held in memory."""
+    """Stream readings as CSV. Only one batch is ever held in memory.
+    NEXUS 2.4: optionally scoped to one equipment."""
     validate_range(from_dt, to_dt)
     yield _csv_chunk([READINGS_CSV_COLUMNS])
+    equipment_sql, equipment_params = _equipment_filter(equipment_id)
     connection = get_connection()
     try:
         cursor = connection.execute(
-            """SELECT timestamp, voltage, current, frequency,
+            f"""SELECT timestamp, voltage, current, frequency,
                       power_factor, active_power, temperature, status
                FROM electrical_readings
-               WHERE timestamp >= ? AND timestamp < ?
+               WHERE timestamp >= ? AND timestamp < ?{equipment_sql}
                ORDER BY timestamp ASC""",
-            (from_dt.isoformat(), to_dt.isoformat()),
+            (from_dt.isoformat(), to_dt.isoformat(), *equipment_params),
         )
         while True:
             rows = cursor.fetchmany(batch)
@@ -172,21 +186,26 @@ def iter_readings_csv(
 
 
 def iter_events_csv(
-    from_dt: datetime, to_dt: datetime, batch: int = 1000
+    from_dt: datetime,
+    to_dt: datetime,
+    batch: int = 1000,
+    equipment_id: int | None = None,
 ) -> Iterator[bytes]:
-    """Stream events as CSV. Only one batch is ever held in memory."""
+    """Stream events as CSV. Only one batch is ever held in memory.
+    NEXUS 2.4: optionally scoped to one equipment."""
     validate_range(from_dt, to_dt)
     yield _csv_chunk([EVENTS_CSV_COLUMNS])
+    equipment_sql, equipment_params = _equipment_filter(equipment_id)
     connection = get_connection()
     try:
         cursor = connection.execute(
-            """SELECT timestamp, event_type, severity, status, message,
+            f"""SELECT timestamp, event_type, severity, status, message,
                       recommendation, occurrences, opened_at, closed_at,
                       last_value, threshold
                FROM monitoring_events
-               WHERE opened_at >= ? AND opened_at < ?
+               WHERE opened_at >= ? AND opened_at < ?{equipment_sql}
                ORDER BY opened_at ASC""",
-            (from_dt.isoformat(), to_dt.isoformat()),
+            (from_dt.isoformat(), to_dt.isoformat(), *equipment_params),
         )
         while True:
             rows = cursor.fetchmany(batch)

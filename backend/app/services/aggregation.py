@@ -63,6 +63,15 @@ class AggregationError(ValueError):
     """Invalid aggregation parameters (surfaced as HTTP 422)."""
 
 
+def _equipment_filter(equipment_id: int | None) -> tuple[str, tuple]:
+    """SQL fragment + params restricting a readings/events/episodes
+    query to one equipment (NEXUS 2.4). Returns ("", ()) when the id is
+    None, keeping the query unfiltered."""
+    if equipment_id is None:
+        return "", ()
+    return " AND equipment_id = ?", (equipment_id,)
+
+
 def parse_bound(value: str, name: str) -> datetime:
     """Parse an ISO-8601 bound. Naive values are interpreted as UTC.
 
@@ -96,6 +105,7 @@ def get_history_extremes(
     metric: str,
     from_dt: datetime,
     to_dt: datetime,
+    equipment_id: int | None = None,
 ) -> dict[str, Any]:
     """Min/max/avg over a range, computed in SQL.
 
@@ -103,7 +113,7 @@ def get_history_extremes(
     "max": {"value", "timestamp"}, "avg", "count"}. When several rows share
     the extreme value, the earliest timestamp wins. Raises
     AggregationError for invalid parameters. Empty ranges return None
-    extremes with count 0.
+    extremes with count 0. NEXUS 2.4: optionally scoped to one equipment.
     """
     if metric not in METRICS:
         raise AggregationError(
@@ -112,14 +122,15 @@ def get_history_extremes(
     validate_range(from_dt, to_dt)
 
     expression = METRICS[metric]
+    equipment_sql, equipment_params = _equipment_filter(equipment_id)
     connection = get_connection()
     try:
         row = connection.execute(
             f"""SELECT MIN({expression}), MAX({expression}),
                        AVG({expression}), COUNT(*)
                 FROM electrical_readings
-                WHERE timestamp >= ? AND timestamp < ?""",
-            (from_dt.isoformat(), to_dt.isoformat()),
+                WHERE timestamp >= ? AND timestamp < ?{equipment_sql}""",
+            (from_dt.isoformat(), to_dt.isoformat(), *equipment_params),
         ).fetchone()
 
         count = row[3]
@@ -129,16 +140,26 @@ def get_history_extremes(
             min_ts = connection.execute(
                 f"""SELECT timestamp FROM electrical_readings
                     WHERE timestamp >= ? AND timestamp < ?
-                      AND {expression} = ?
+                      AND {expression} = ?{equipment_sql}
                     ORDER BY timestamp ASC LIMIT 1""",
-                (from_dt.isoformat(), to_dt.isoformat(), row[0]),
+                (
+                    from_dt.isoformat(),
+                    to_dt.isoformat(),
+                    row[0],
+                    *equipment_params,
+                ),
             ).fetchone()
             max_ts = connection.execute(
                 f"""SELECT timestamp FROM electrical_readings
                     WHERE timestamp >= ? AND timestamp < ?
-                      AND {expression} = ?
+                      AND {expression} = ?{equipment_sql}
                     ORDER BY timestamp ASC LIMIT 1""",
-                (from_dt.isoformat(), to_dt.isoformat(), row[1]),
+                (
+                    from_dt.isoformat(),
+                    to_dt.isoformat(),
+                    row[1],
+                    *equipment_params,
+                ),
             ).fetchone()
             min_point = {"value": row[0], "timestamp": min_ts[0]}
             max_point = {"value": row[1], "timestamp": max_ts[0]}
@@ -157,31 +178,32 @@ def get_history_extremes(
 
 
 def get_analytics_overview(
-    from_dt: datetime, to_dt: datetime
+    from_dt: datetime, to_dt: datetime, equipment_id: int | None = None
 ) -> dict[str, Any]:
     """Period analytics, computed from the real stored tables.
 
     Returns readings_count, energy_kwh (real timestamp deltas, same
     300 s cap as stats/summary), per_metric min/max/avg, events_by_severity,
     events_by_status and episode counts. Everything comes from actual rows;
-    no number is invented.
+    no number is invented. NEXUS 2.4: optionally scoped to one equipment.
     """
     validate_range(from_dt, to_dt)
     from_iso, to_iso = from_dt.isoformat(), to_dt.isoformat()
+    equipment_sql, equipment_params = _equipment_filter(equipment_id)
 
     connection = get_connection()
     try:
         readings_count = connection.execute(
-            """SELECT COUNT(*) FROM electrical_readings
-               WHERE timestamp >= ? AND timestamp < ?""",
-            (from_iso, to_iso),
+            f"""SELECT COUNT(*) FROM electrical_readings
+               WHERE timestamp >= ? AND timestamp < ?{equipment_sql}""",
+            (from_iso, to_iso, *equipment_params),
         ).fetchone()[0]
 
         energy_rows = connection.execute(
-            """SELECT timestamp, active_power FROM electrical_readings
-               WHERE timestamp >= ? AND timestamp < ?
+            f"""SELECT timestamp, active_power FROM electrical_readings
+               WHERE timestamp >= ? AND timestamp < ?{equipment_sql}
                ORDER BY timestamp ASC""",
-            (from_iso, to_iso),
+            (from_iso, to_iso, *equipment_params),
         ).fetchall()
 
         per_metric: dict[str, dict[str, float | None]] = {}
@@ -190,33 +212,34 @@ def get_analytics_overview(
                 f"""SELECT MIN({METRICS[metric]}), MAX({METRICS[metric]}),
                            AVG({METRICS[metric]})
                     FROM electrical_readings
-                    WHERE timestamp >= ? AND timestamp < ?""",
-                (from_iso, to_iso),
+                    WHERE timestamp >= ? AND timestamp < ?{equipment_sql}""",
+                (from_iso, to_iso, *equipment_params),
             ).fetchone()
             per_metric[metric] = {"min": row[0], "max": row[1], "avg": row[2]}
 
         severity_rows = connection.execute(
-            """SELECT severity, COUNT(*) FROM monitoring_events
-               WHERE opened_at >= ? AND opened_at < ?
+            f"""SELECT severity, COUNT(*) FROM monitoring_events
+               WHERE opened_at >= ? AND opened_at < ?{equipment_sql}
                GROUP BY severity""",
-            (from_iso, to_iso),
+            (from_iso, to_iso, *equipment_params),
         ).fetchall()
         status_rows = connection.execute(
-            """SELECT status, COUNT(*) FROM monitoring_events
-               WHERE opened_at >= ? AND opened_at < ?
+            f"""SELECT status, COUNT(*) FROM monitoring_events
+               WHERE opened_at >= ? AND opened_at < ?{equipment_sql}
                GROUP BY status""",
-            (from_iso, to_iso),
+            (from_iso, to_iso, *equipment_params),
         ).fetchall()
 
         episodes_total = connection.execute(
-            """SELECT COUNT(*) FROM diagnostic_episodes
-               WHERE started_at >= ? AND started_at < ?""",
-            (from_iso, to_iso),
+            f"""SELECT COUNT(*) FROM diagnostic_episodes
+               WHERE started_at >= ? AND started_at < ?{equipment_sql}""",
+            (from_iso, to_iso, *equipment_params),
         ).fetchone()[0]
         episodes_open = connection.execute(
-            """SELECT COUNT(*) FROM diagnostic_episodes
-               WHERE status = 'open' AND started_at >= ? AND started_at < ?""",
-            (from_iso, to_iso),
+            f"""SELECT COUNT(*) FROM diagnostic_episodes
+               WHERE status = 'open'
+                 AND started_at >= ? AND started_at < ?{equipment_sql}""",
+            (from_iso, to_iso, *equipment_params),
         ).fetchone()[0]
     finally:
         connection.close()
@@ -250,11 +273,13 @@ def get_history_buckets(
     from_dt: datetime,
     to_dt: datetime,
     bucket: str,
+    equipment_id: int | None = None,
 ) -> list[dict[str, Any]]:
     """Aggregate one metric into time buckets.
 
     Returns [{"t", "min", "max", "avg", "count"}] ordered by time. Raises
-    AggregationError for invalid parameters.
+    AggregationError for invalid parameters. NEXUS 2.4: optionally
+    scoped to one equipment.
     """
     if metric not in METRICS:
         raise AggregationError(
@@ -282,6 +307,7 @@ def get_history_buckets(
         )
 
     expression = METRICS[metric]
+    equipment_sql, equipment_params = _equipment_filter(equipment_id)
     connection = get_connection()
     try:
         rows = connection.execute(
@@ -293,11 +319,11 @@ def get_history_buckets(
                 AVG({expression}) AS avg_v,
                 COUNT(*) AS n
             FROM electrical_readings
-            WHERE timestamp >= ? AND timestamp < ?
+            WHERE timestamp >= ? AND timestamp < ?{equipment_sql}
             GROUP BY bucket_id
             ORDER BY bucket_id ASC
             """,
-            (bucket_s, from_dt.isoformat(), to_dt.isoformat()),
+            (bucket_s, from_dt.isoformat(), to_dt.isoformat(), *equipment_params),
         ).fetchall()
     finally:
         connection.close()
@@ -350,22 +376,32 @@ def compute_energy_kwh(rows: list[tuple[str, float]]) -> float:
     return energy
 
 
-def get_stats_summary(now: datetime | None = None) -> dict[str, Any]:
-    """Consolidated dashboard payload, computed from real stored data."""
+def get_stats_summary(
+    now: datetime | None = None, equipment_id: int | None = None
+) -> dict[str, Any]:
+    """Consolidated dashboard payload, computed from real stored data.
+
+    NEXUS 2.4: optionally scoped to one equipment (readings, energy,
+    last-24h stats, status counts and the current reading). Telemetry
+    uptime is process-global and stays unscoped.
+    """
     now = now or datetime.now(timezone.utc)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     day_ago = now - timedelta(hours=24)
+    equipment_sql, equipment_params = _equipment_filter(equipment_id)
 
     connection = get_connection()
     try:
         readings_count = connection.execute(
-            "SELECT COUNT(*) FROM electrical_readings"
+            f"""SELECT COUNT(*) FROM electrical_readings
+                WHERE 1 = 1{equipment_sql}""",
+            (*equipment_params,),
         ).fetchone()[0]
 
         energy_rows = connection.execute(
-            """SELECT timestamp, active_power FROM electrical_readings
-               WHERE timestamp >= ? ORDER BY timestamp ASC""",
-            (day_start.isoformat(),),
+            f"""SELECT timestamp, active_power FROM electrical_readings
+               WHERE timestamp >= ?{equipment_sql} ORDER BY timestamp ASC""",
+            (day_start.isoformat(), *equipment_params),
         ).fetchall()
 
         last_24h: dict[str, dict[str, float | None]] = {}
@@ -373,15 +409,16 @@ def get_stats_summary(now: datetime | None = None) -> dict[str, Any]:
             row = connection.execute(
                 f"""SELECT MIN({METRICS[metric]}), MAX({METRICS[metric]}),
                            AVG({METRICS[metric]})
-                    FROM electrical_readings WHERE timestamp >= ?""",
-                (day_ago.isoformat(),),
+                    FROM electrical_readings
+                    WHERE timestamp >= ?{equipment_sql}""",
+                (day_ago.isoformat(), *equipment_params),
             ).fetchone()
             last_24h[metric] = {"min": row[0], "max": row[1], "avg": row[2]}
 
         status_rows = connection.execute(
-            """SELECT status, COUNT(*) FROM electrical_readings
-               WHERE timestamp >= ? GROUP BY status""",
-            (day_ago.isoformat(),),
+            f"""SELECT status, COUNT(*) FROM electrical_readings
+               WHERE timestamp >= ?{equipment_sql} GROUP BY status""",
+            (day_ago.isoformat(), *equipment_params),
         ).fetchall()
     finally:
         connection.close()
@@ -390,7 +427,7 @@ def get_stats_summary(now: datetime | None = None) -> dict[str, Any]:
         [(r["timestamp"], r["active_power"]) for r in energy_rows]
     )
 
-    latest = get_latest_reading_from_db()
+    latest = get_latest_reading_from_db(equipment_id=equipment_id)
     if latest and isinstance(latest.get("timestamp"), datetime):
         latest["timestamp"] = latest["timestamp"].isoformat()
 

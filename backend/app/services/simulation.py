@@ -28,8 +28,15 @@ from app.engine.simulator import (
     VALID_MODES,
     simulator,
 )
+from app.services import equipment as equipment_service
 
 logger = logging.getLogger(__name__)
+
+
+class SimulationConflict(SimulationError):
+    """A scoped stop/reset targeted an equipment that does not own the
+    active session. Maps to HTTP 409."""
+
 
 # Metrics tracked for peak_values during a session.
 PEAK_METRICS = (
@@ -101,6 +108,7 @@ def _session_info(session: dict[str, Any]) -> dict[str, Any]:
         "started_at": session["started_at"].isoformat(),
         "ends_at": ends_at.isoformat() if ends_at else None,
         "remaining_seconds": remaining,
+        "equipment_id": session["equipment_id"],
     }
 
 
@@ -110,6 +118,7 @@ def _insert_session_row(
     duration_minutes: float | None,
     anomalies: list[str],
     started_at: datetime,
+    equipment_id: int,
 ) -> int:
     parameters = json.dumps(
         {
@@ -122,9 +131,10 @@ def _insert_session_row(
     connection = get_connection()
     try:
         cursor = connection.execute(
-            """INSERT INTO simulation_sessions (mode, parameters, started_at)
-               VALUES (?, ?, ?)""",
-            (mode, parameters, started_at.isoformat()),
+            """INSERT INTO simulation_sessions
+                   (mode, parameters, started_at, equipment_id)
+               VALUES (?, ?, ?, ?)""",
+            (mode, parameters, started_at.isoformat(), equipment_id),
         )
         connection.commit()
         return cursor.lastrowid
@@ -158,6 +168,7 @@ def _finish_session_locked(now: datetime) -> dict[str, Any] | None:
         "started_at": session["started_at"].isoformat(),
         "ended_at": now.isoformat(),
         "peak_values": session["peaks"],
+        "equipment_id": session["equipment_id"],
     }
     _active = None
     simulator.reset_scenario()
@@ -174,9 +185,16 @@ def start_simulation(
     intensity: float = 100.0,
     duration_minutes: float | None = None,
     anomalies: list[str] | tuple[str, ...] | None = None,
+    equipment_id: Any = None,
 ) -> dict[str, Any]:
     """Start a simulation scenario. Validates everything; raises
     SimulationError on invalid input.
+
+    NEXUS 2.4: the scenario is attributed to one equipment
+    (``equipment_id`` accepts ids and codes; None = DEFAULT). The
+    telemetry tick stamps that equipment's readings while the session
+    runs. Unknown equipment raises EquipmentNotFound (404); disabled
+    equipment raises EquipmentConflict (409).
 
     Starting mode="normal" with no anomalies stops any active session and
     restores the baseline without creating an audit row (there is nothing
@@ -187,6 +205,12 @@ def start_simulation(
         raise SimulationError(
             f"Invalid simulation mode: {mode!r}. Valid: {sorted(VALID_MODES)}"
         )
+    # Resolve early so invalid/disabled equipment fails before any state
+    # changes. require_writable_equipment raises EquipmentNotFound (404)
+    # and EquipmentConflict (409); SimulationError stays 422.
+    resolved_equipment_id = equipment_service.require_writable_equipment(
+        equipment_id
+    )
     duration = _validate_duration(duration_minutes)
     # apply_scenario validates intensity and the anomaly list/combination.
     simulator.apply_scenario(mode, intensity=intensity, anomalies=anomalies)
@@ -206,6 +230,7 @@ def start_simulation(
             duration,
             scenario["anomalies"],
             now,
+            resolved_equipment_id,
         )
         global _active
         _active = {
@@ -216,6 +241,7 @@ def start_simulation(
             "started_at": now,
             "ends_at": ends_at,
             "peaks": {},
+            "equipment_id": resolved_equipment_id,
         }
         info = _session_info(_active)
     logger.info(
@@ -228,7 +254,7 @@ def start_simulation(
     return info
 
 
-def idle_status() -> dict[str, Any]:
+def idle_status(equipment_id: int | None = None) -> dict[str, Any]:
     return {
         "running": False,
         "session_id": None,
@@ -238,15 +264,37 @@ def idle_status() -> dict[str, Any]:
         "started_at": None,
         "ends_at": None,
         "remaining_seconds": 0,
+        "equipment_id": equipment_id,
     }
 
 
-def get_status() -> dict[str, Any]:
-    """Cheap status snapshot for polling. Never raises."""
+def get_status(equipment_id: int | None = None) -> dict[str, Any]:
+    """Cheap status snapshot for polling. Never raises.
+
+    NEXUS 2.4: with ``equipment_id`` the view is per-equipment — when
+    the active session belongs to another equipment, this equipment is
+    reported idle (its own honest state) instead of leaking the other
+    equipment's session.
+    """
     with _LOCK:
         if _active is None:
-            return idle_status()
+            return idle_status(equipment_id)
+        if (
+            equipment_id is not None
+            and _active["equipment_id"] != equipment_id
+        ):
+            return idle_status(equipment_id)
         return _session_info(_active)
+
+
+def get_active_equipment_id() -> int | None:
+    """Equipment id of the active simulation session, or None when idle.
+
+    The telemetry tick uses this to stamp each reading; None means the
+    tick falls back to the DEFAULT equipment.
+    """
+    with _LOCK:
+        return _active["equipment_id"] if _active else None
 
 
 def current_mode() -> str:
@@ -255,21 +303,45 @@ def current_mode() -> str:
         return _active["mode"] if _active else "normal"
 
 
-def stop_simulation() -> dict[str, Any]:
-    """Stop the active session, idempotent when nothing is running."""
-    now = _now()
+def _check_stop_scope(equipment_id: int | None) -> None:
+    """Guard for scoped stop/reset. With ``equipment_id`` given, the
+    active session must belong to that equipment; stopping another
+    equipment's session is a conflict. Must run under _LOCK."""
+    if (
+        equipment_id is not None
+        and _active is not None
+        and _active["equipment_id"] != equipment_id
+    ):
+        raise SimulationConflict(
+            "active simulation belongs to equipment"
+            f" {_active['equipment_id']}, not {equipment_id}"
+        )
+
+
+def stop_simulation(equipment_id: int | None = None) -> dict[str, Any]:
+    """Stop the active session, idempotent when nothing is running.
+
+    NEXUS 2.4: ``equipment_id`` scopes the stop — when given and the
+    active session belongs to another equipment, raises
+    SimulationConflict instead of stopping someone else's session.
+    Omitted (legacy) stops whatever is active.
+    """
     with _LOCK:
-        finished = _finish_session_locked(now)
+        _check_stop_scope(equipment_id)
+        finished = _finish_session_locked(_now())
     if finished is None:
         return {"stopped": False, **idle_status()}
     return {"stopped": True, **finished}
 
 
-def reset_simulation() -> dict[str, Any]:
-    """Back to baseline: end any session, clear timer and composer state."""
-    now = _now()
+def reset_simulation(equipment_id: int | None = None) -> dict[str, Any]:
+    """Back to baseline: end any session, clear timer and composer state.
+
+    NEXUS 2.4: same scoping contract as stop_simulation.
+    """
     with _LOCK:
-        finished = _finish_session_locked(now)
+        _check_stop_scope(equipment_id)
+        finished = _finish_session_locked(_now())
         simulator.reset_scenario()
     result: dict[str, Any] = {"reset": True, **idle_status()}
     if finished is not None:
@@ -317,9 +389,12 @@ def track_peak(reading: dict[str, Any]) -> None:
 
 
 def list_sessions(
-    limit: int = DEFAULT_SESSIONS_LIMIT, cursor: int | None = None
+    limit: int = DEFAULT_SESSIONS_LIMIT,
+    cursor: int | None = None,
+    equipment_id: int | None = None,
 ) -> dict[str, Any]:
-    """Newest-first session history with a defensive limit and id cursor."""
+    """Newest-first session history with a defensive limit and id
+    cursor. NEXUS 2.4: optionally scoped to one equipment."""
     if not isinstance(limit, int) or isinstance(limit, bool):
         raise SimulationError("limit must be an integer")
     if limit < 1 or limit > MAX_SESSIONS_LIMIT:
@@ -334,22 +409,28 @@ def list_sessions(
     with _LOCK:
         active_id = _active["session_id"] if _active else None
 
+    equipment_sql = " AND equipment_id = ?" if equipment_id is not None else ""
+    equipment_params = (equipment_id,) if equipment_id is not None else ()
+
     connection = get_connection()
     try:
         if cursor is None:
             rows = connection.execute(
-                """SELECT id, mode, parameters, started_at, ended_at, peak_values
+                f"""SELECT id, mode, parameters, started_at, ended_at,
+                           peak_values, equipment_id
                    FROM simulation_sessions
+                   WHERE 1 = 1{equipment_sql}
                    ORDER BY id DESC LIMIT ?""",
-                (limit,),
+                (*equipment_params, limit),
             ).fetchall()
         else:
             rows = connection.execute(
-                """SELECT id, mode, parameters, started_at, ended_at, peak_values
+                f"""SELECT id, mode, parameters, started_at, ended_at,
+                           peak_values, equipment_id
                    FROM simulation_sessions
-                   WHERE id < ?
+                   WHERE id < ?{equipment_sql}
                    ORDER BY id DESC LIMIT ?""",
-                (cursor, limit),
+                (cursor, *equipment_params, limit),
             ).fetchall()
     finally:
         connection.close()
@@ -357,7 +438,10 @@ def list_sessions(
     now = _now()
     sessions = []
     for row in rows:
-        sid, mode, parameters, started_at, ended_at, peak_values = row
+        (
+            sid, mode, parameters, started_at, ended_at, peak_values,
+            session_equipment_id,
+        ) = row
         if ended_at:
             status = "finished"
             duration_s = (
@@ -380,6 +464,7 @@ def list_sessions(
                 "duration_s": duration_s,
                 "peak_values": json.loads(peak_values) if peak_values else None,
                 "status": status,
+                "equipment_id": session_equipment_id,
             }
         )
 
