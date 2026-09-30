@@ -1,4 +1,4 @@
-# NEXUS API v1 (backend 2.3)
+# NEXUS API v1 (backend 2.4)
 
 New functionality lives under `/api/v1/*`. The legacy `/api/*` endpoints
 keep their exact paths, formats and status codes — see
@@ -13,7 +13,14 @@ Interactive docs: `http://localhost:8000/docs`
   timestamps are UTC).
 - Severities are normalized to `info` / `warning` / `critical`.
 - Validation failures return `422` with a `detail` message; unknown ids
-  return `404`.
+  return `404`; conflicts (duplicate code, delete with history, scoped
+  stop on another equipment's session, writes to disabled equipment)
+  return `409`.
+- `equipment_id` (NEXUS 2.4): every scoped endpoint accepts an optional
+  `equipment_id` query/body parameter — an integer id **or** a code
+  (e.g. `?equipment_id=PANEL_B`). Omitted always means the `DEFAULT`
+  equipment, so pre-2.4 callers keep working unchanged. Unknown values
+  return `404`; disabled equipment rejects writes with `409`.
 
 ## Settings
 
@@ -308,6 +315,46 @@ settings, defaults below):
 | Diagnostic episodes | 90 days |
 | Simulation sessions | 180 days |
 | Settings | permanent |
+
+## Equipment registry (2.4)
+
+Multiple electrical equipment, one shared engine. Every reading, event,
+diagnostic episode and simulation session is attributed to an equipment;
+all telemetry, analytics, history, extremes, stats, reports, simulation
+and SSE endpoints accept `?equipment_id=` (id or code, omitted =
+`DEFAULT`).
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/equipment` | List all equipment (`DEFAULT` first) |
+| `GET` | `/api/v1/equipment/{id}` | Single equipment (`404` on unknown) |
+| `POST` | `/api/v1/equipment` | Create (`code` unique, `name` required, `status` in `active`/`inactive`/`maintenance`) |
+| `PATCH` | `/api/v1/equipment/{id}` | Partial update |
+| `DELETE` | `/api/v1/equipment/{id}` | Physical delete — refused (`409`) for `DEFAULT` or equipment with historical data; deactivate instead |
+| `GET` | `/api/v1/equipment/{id}/summary` | Real-data summary: last reading + timestamp, current diagnosis (recomputed from the last reading), active events, open episodes, readings count; honest nulls/zeros when empty |
+
+Simulation scoping (2.4):
+
+- `POST /api/v1/simulation/start` accepts `equipment_id` (id or code);
+  the session is attributed to that equipment and the telemetry tick
+  stamps its readings/events/episodes accordingly. Starting on a
+  disabled equipment returns `409`. There is still a single global
+  simulation flow.
+- `GET /api/v1/simulation/status?equipment_id=` and
+  `GET /api/v1/simulation/sessions?equipment_id=` are per-equipment
+  views: another equipment's active session is reported as idle for the
+  equipment asked.
+- `POST /api/v1/simulation/stop?equipment_id=` and
+  `POST /api/v1/simulation/reset?equipment_id=` are scoped stops: the
+  active session must belong to the given equipment (`409` on mismatch).
+  Omitted keeps the legacy global stop/reset.
+- `GET /api/v1/stream/readings?equipment_id=` only emits that
+  equipment's data events.
+
+Migration v4 (idempotent, preserves all 2.3 data): creates the
+`equipment` table with a deterministic `DEFAULT` row (`Main Electrical
+System`), adds `equipment_id` to readings/events/episodes/simulation
+sessions, and backfills every existing row to `DEFAULT`.
 
 ## Legacy compatibility
 

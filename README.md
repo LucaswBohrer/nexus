@@ -17,6 +17,7 @@ Supervising electrical installations (voltage, current, power factor, temperatur
 - Live electrical telemetry sampled at 1 Hz (voltage, current, frequency, power factor, active power, temperature)
 - Automatic anomaly detection with severity classification (`normal` / `warning` / `critical`)
 - Diagnostic messages + maintenance recommendations per anomaly
+- Multi-equipment registry: every reading, event, episode and simulation session is attributed to an equipment; all endpoints accept `?equipment_id=` (omitted = `DEFAULT`)
 - Persistent monitoring events
 - SQLite persistence with 30-day retention and automatic pruning
 - Power history chart with live updates
@@ -224,7 +225,7 @@ cd backend
 .venv/bin/python -m unittest discover -s tests
 ```
 
-Covers: health checks, pagination limits, 30-day retention pruning, corrupt-database recovery, simulation modes, configuration overrides, the CORS allowlist, settings persistence/validation, the event lifecycle (deduplication, 5-tick resolution, transitions), history aggregation, energy integration from real deltas, and API-key write protection.
+Covers: health checks, pagination limits, 30-day retention pruning, corrupt-database recovery, simulation modes, configuration overrides, the CORS allowlist, settings persistence/validation, the event lifecycle (deduplication, 5-tick resolution, transitions), history aggregation, energy integration from real deltas, API-key write protection, the equipment registry (migration v4, CRUD/validation, per-equipment isolation of telemetry/events/episodes/analytics/reports/simulation/SSE, scoped stop/reset).
 
 Frontend: `npx tsc --noEmit`, `npm run lint`, `npm run build`. (No test framework is installed on purpose — the dashboard is validated via typecheck, lint and build; see Roadmap.)
 
