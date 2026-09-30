@@ -11,6 +11,7 @@ import {
 
 import { getAnalyticsOverview } from "../../lib/api";
 import { formatDateTime, formatNumber } from "../../lib/format";
+import { useEquipment } from "../../lib/equipment";
 import { usePreferences } from "../../lib/preferences";
 import type { AnalyticsOverview } from "../../types/monitoring";
 import {
@@ -21,6 +22,7 @@ import {
   LoadingState,
   PageHeader,
 } from "../../components/ui";
+import { EquipmentContextLine } from "../../components/EquipmentContext";
 
 const PERIODS = ["24h", "7d", "31d"] as const;
 type Period = (typeof PERIODS)[number];
@@ -85,6 +87,7 @@ function CountRow({ label, value }: { label: string; value: number }) {
 
 export default function AnalyticsPage() {
   const { t, preferences } = usePreferences();
+  const { equipmentId } = useEquipment();
   const [period, setPeriod] = useState<Period>("24h");
   const [data, setData] = useState<AnalyticsOverview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -101,6 +104,7 @@ export default function AnalyticsPage() {
         const overview = await getAnalyticsOverview({
           from: from.toISOString(),
           to: to.toISOString(),
+          equipmentId,
         });
         if (!cancelled) {
           setData(overview);
@@ -121,7 +125,7 @@ export default function AnalyticsPage() {
     return () => {
       cancelled = true;
     };
-  }, [period, t]);
+  }, [period, equipmentId, t]);
 
   const metricLabels: Record<string, string> = {
     voltage: t.dashboard.voltage,
@@ -139,6 +143,7 @@ export default function AnalyticsPage() {
 
   return (
     <div className="space-y-5">
+      <EquipmentContextLine />
       <PageHeader
         title={t.analytics.title}
         subtitle={t.analytics.subtitle}

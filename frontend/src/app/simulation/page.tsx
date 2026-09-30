@@ -27,6 +27,7 @@ import {
   stopSimulation,
 } from "../../lib/api";
 import { formatDateTime, formatNumber } from "../../lib/format";
+import { useEquipment } from "../../lib/equipment";
 import { usePreferences } from "../../lib/preferences";
 import { errorMessage, usePoll } from "../../lib/usePoll";
 import type {
@@ -43,6 +44,7 @@ import {
   LoadingState,
   PageHeader,
 } from "../../components/ui";
+import { EquipmentContextLine } from "../../components/EquipmentContext";
 
 const PRESETS: { value: SimulationMode; icon: ElementType }[] = [
   { value: "normal", icon: CheckCircle2 },
@@ -96,13 +98,23 @@ function formatDuration(totalSeconds: number | null): string {
 
 export default function SimulationPage() {
   const { t, preferences } = usePreferences();
+  const { equipmentId, equipment } = useEquipment();
 
+  // Status e sessões são escopados ao equipamento selecionado. A
+  // simulação continua sendo um fluxo global único no backend; start
+  // carrega o equipment_id e stop/reset escopados retornam 409 em caso
+  // de divergência com a sessão ativa.
   const {
     data: status,
     error: statusError,
     loading: statusLoading,
     refresh: refreshStatus,
-  } = usePoll(getSimulationStatus, 2000, t.simulation.statusError);
+  } = usePoll(
+    () => getSimulationStatus(equipmentId),
+    2000,
+    t.simulation.statusError,
+    equipmentId
+  );
 
   // --- Countdown local, sempre ressincronizado com o backend ---
   const [remaining, setRemaining] = useState<number | null>(null);
@@ -139,7 +151,11 @@ export default function SimulationPage() {
       }
       setSessionsError(null);
       try {
-        const page = await getSimulationSessions(20, cursor ?? undefined);
+        const page = await getSimulationSessions(
+          20,
+          cursor ?? undefined,
+          equipmentId
+        );
         setSessions((prev) => (append ? [...prev, ...page.sessions] : page.sessions));
         setNextCursor(page.next_cursor);
       } catch (err) {
@@ -149,7 +165,7 @@ export default function SimulationPage() {
         setLoadingMore(false);
       }
     },
-    [t]
+    [t, equipmentId]
   );
 
   const refreshSessions = useCallback(() => {
@@ -232,15 +248,21 @@ export default function SimulationPage() {
         intensity,
         duration_minutes: durationMinutes,
         anomalies: mode === "sensor_failure" ? [] : anomalies,
+        equipment_id: equipmentId,
       })
     );
   }
 
   const running = status?.running === true;
   const composerDisabled = mode === "sensor_failure";
+  // Equipamento desativado recusa writes no backend (409): o Iniciar é
+  // bloqueado aqui com mensagem honesta; Parar/Reset são ações de
+  // recuperação e o backend decide.
+  const writesBlocked = equipment !== null && !equipment.enabled;
 
   return (
     <div className="space-y-5">
+      <EquipmentContextLine />
       <PageHeader
         title={t.simulation.title}
         subtitle={t.simulation.subtitle}
@@ -250,6 +272,13 @@ export default function SimulationPage() {
         <ErrorBanner message={statusError} onRetry={refreshStatus} />
       )}
       {actionError && <ErrorBanner message={actionError} />}
+      {writesBlocked && equipment && (
+        <Card>
+          <p className="rounded-xl bg-surface-2 px-4 py-3 text-sm text-[var(--warn)]">
+            {t.equipment.writeBlocked} ({equipment.name} · {equipment.code})
+          </p>
+        </Card>
+      )}
 
       {/* --- Status atual --- */}
       <Card>
@@ -471,8 +500,9 @@ export default function SimulationPage() {
           <button
             type="button"
             onClick={handleStart}
-            disabled={busy !== null}
-            className="flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-2xl bg-[var(--info)] px-6 text-sm font-semibold text-white transition disabled:cursor-wait disabled:opacity-60"
+            disabled={busy !== null || writesBlocked}
+            title={writesBlocked ? t.equipment.writeBlocked : undefined}
+            className="flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-2xl bg-[var(--info)] px-6 text-sm font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-60"
           >
             {busy === "start" ? (
               <Loader2 size={18} className="animate-spin" />
@@ -483,7 +513,7 @@ export default function SimulationPage() {
           </button>
           <button
             type="button"
-            onClick={() => runAction("stop", stopSimulation)}
+            onClick={() => runAction("stop", () => stopSimulation(equipmentId))}
             disabled={busy !== null}
             className="flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-2xl bg-surface-3 px-6 text-sm font-semibold text-ink transition disabled:cursor-wait disabled:opacity-60"
           >
@@ -496,7 +526,7 @@ export default function SimulationPage() {
           </button>
           <button
             type="button"
-            onClick={() => runAction("reset", resetSimulation)}
+            onClick={() => runAction("reset", () => resetSimulation(equipmentId))}
             disabled={busy !== null}
             className="flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-2xl bg-surface-3 px-6 text-sm font-semibold text-ink transition disabled:cursor-wait disabled:opacity-60"
           >

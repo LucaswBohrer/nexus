@@ -5,6 +5,7 @@ import { Bell, Check, Search } from "lucide-react";
 
 import { ApiError, getEventsV1, patchEvent } from "../../lib/api";
 import { formatDateTime, formatNumber } from "../../lib/format";
+import { useEquipment } from "../../lib/equipment";
 import { usePreferences } from "../../lib/preferences";
 import type {
   EventStatus,
@@ -19,6 +20,7 @@ import {
   LoadingState,
   PageHeader,
 } from "../../components/ui";
+import { EquipmentContextLine } from "../../components/EquipmentContext";
 
 type Tab = "active" | "all" | "resolved";
 
@@ -72,6 +74,7 @@ function mergeById(lists: V1Event[][]): V1Event[] {
 
 export default function EventsPage() {
   const { t, preferences } = usePreferences();
+  const { equipmentId } = useEquipment();
 
   const [tab, setTab] = useState<Tab>("active");
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
@@ -99,13 +102,14 @@ export default function EventsPage() {
     () =>
       JSON.stringify({
         tab,
+        equipmentId,
         severity: filters.severity,
         type: filters.type,
         from: filters.from,
         to: filters.to,
         q: filters.q,
       }),
-    [tab, filters]
+    [tab, equipmentId, filters]
   );
 
   const fetchPage = useCallback(
@@ -117,11 +121,12 @@ export default function EventsPage() {
         from: toIso(filters.from),
         to: toIso(filters.to),
         q: filters.q || undefined,
+        equipment_id: equipmentId,
         limit: 20,
         cursor,
       });
     },
-    [filters]
+    [filters, equipmentId]
   );
 
   const firstLoadRef = useRef("");
@@ -236,6 +241,7 @@ export default function EventsPage() {
 
   return (
     <div className="space-y-5">
+      <EquipmentContextLine />
       <PageHeader title={t.events.title} subtitle={t.events.subtitle} />
 
       {/* ABAS */}

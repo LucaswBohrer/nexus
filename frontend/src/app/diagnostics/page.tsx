@@ -13,12 +13,13 @@ import {
 } from "recharts";
 
 import {
-  getDiagnostics,
+  getEquipmentDiagnosis,
   getEpisodes,
   getHistoryBuckets,
   getSettings,
 } from "../../lib/api";
 import { formatDateTime, formatNumber } from "../../lib/format";
+import { useEquipment } from "../../lib/equipment";
 import { usePreferences } from "../../lib/preferences";
 import { usePoll } from "../../lib/usePoll";
 import type {
@@ -36,6 +37,7 @@ import {
   LoadingState,
   PageHeader,
 } from "../../components/ui";
+import { EquipmentContextLine } from "../../components/EquipmentContext";
 
 const THRESHOLD_KEYS = [
   "thresholds.voltage_min",
@@ -63,9 +65,11 @@ function bucketForRange(fromMs: number, toMs: number): "5m" | "15m" | "1h" | "1d
 function EpisodeHistory({
   episode,
   metric,
+  equipmentId,
 }: {
   episode: DiagnosticEpisode;
   metric: string;
+  equipmentId: number | null;
 }) {
   const { t } = usePreferences();
   const [buckets, setBuckets] = useState<HistoryBucket[]>([]);
@@ -84,6 +88,7 @@ function EpisodeHistory({
           from: new Date(fromMs).toISOString(),
           to: new Date(toMs).toISOString(),
           bucket: bucketForRange(fromMs, toMs),
+          equipmentId,
         });
         if (!cancelled) {
           setBuckets(data);
@@ -97,7 +102,7 @@ function EpisodeHistory({
     return () => {
       cancelled = true;
     };
-  }, [episode, metric, t]);
+  }, [episode, metric, equipmentId, t]);
 
   if (error) {
     return <p className="py-6 text-center text-xs text-faint">{error}</p>;
@@ -165,7 +170,13 @@ function EpisodeHistory({
   );
 }
 
-function EpisodeCard({ episode }: { episode: DiagnosticEpisode }) {
+function EpisodeCard({
+  episode,
+  equipmentId,
+}: {
+  episode: DiagnosticEpisode;
+  equipmentId: number | null;
+}) {
   const { t, preferences } = usePreferences();
   const [expanded, setExpanded] = useState(false);
 
@@ -234,7 +245,11 @@ function EpisodeCard({ episode }: { episode: DiagnosticEpisode }) {
           )}
 
           {chartMetric && (
-            <EpisodeHistory episode={episode} metric={chartMetric} />
+            <EpisodeHistory
+              episode={episode}
+              metric={chartMetric}
+              equipmentId={equipmentId}
+            />
           )}
 
           {episode.recommendations.length > 0 && (
@@ -257,28 +272,46 @@ function EpisodeCard({ episode }: { episode: DiagnosticEpisode }) {
 
 export default function DiagnosticsPage() {
   const { t, preferences } = usePreferences();
+  const { equipmentId } = useEquipment();
 
+  // O endpoint legado /api/monitoring/diagnostics não tem escopo por
+  // equipamento: o diagnóstico vem do Equipment Summary. Um equipamento
+  // sem leituras ainda não tem diagnóstico — estado honesto, não erro.
   const diagPoll = usePoll(
-    getDiagnostics,
+    async () => {
+      try {
+        // Sem leituras ainda, o summary não tem diagnóstico: fallback
+        // determinístico para DEFAULT enquanto o contexto carrega.
+        return await getEquipmentDiagnosis(equipmentId ?? "DEFAULT");
+      } catch (err) {
+        if (err instanceof Error && err.message === "no-data") {
+          return null;
+        }
+        throw err;
+      }
+    },
     preferences.pollingIntervalMs,
-    t.common.connectionError
+    t.common.connectionError,
+    equipmentId
   );
   const episodesPoll = usePoll(
-    () => getEpisodes(20),
+    () => getEpisodes(20, equipmentId),
     30000,
-    t.common.connectionError
+    t.common.connectionError,
+    equipmentId
   );
   const settingsPoll = usePoll(getSettings, 0, t.common.connectionError);
 
-  const diagnosis = diagPoll.data?.diagnosis;
+  const diagnosis = diagPoll.data?.diagnosis ?? null;
   const episodes = episodesPoll.data ?? [];
   const settings = (settingsPoll.data ?? {}) as Record<string, SettingValue>;
 
   const error = diagPoll.error ?? episodesPoll.error ?? null;
-  const loading = diagPoll.loading && !diagnosis;
+  const loading = diagPoll.loading && !diagPoll.data;
 
   return (
     <div className="space-y-5">
+      <EquipmentContextLine />
       <PageHeader
         title={t.diagnostics.title}
         subtitle={t.diagnostics.subtitle}
@@ -296,23 +329,25 @@ export default function DiagnosticsPage() {
 
       {loading ? (
         <LoadingState />
-      ) : diagnosis ? (
+      ) : (
         <>
-          {/* DIAGNÓSTICO ATUAL — 100% backend */}
-          <Card>
-            <CardHeader
-              eyebrow={t.diagnostics.currentDiagnosis}
-              title={t.diagnostics.currentDiagnosis}
-              action={
-                <Badge tone={diagnosis.severity}>
-                  {
-                    t.status[
-                      diagnosis.status as "normal" | "warning" | "critical"
-                    ]
+          {diagnosis ? (
+            <>
+              {/* DIAGNÓSTICO ATUAL — 100% backend */}
+              <Card>
+                <CardHeader
+                  eyebrow={t.diagnostics.currentDiagnosis}
+                  title={t.diagnostics.currentDiagnosis}
+                  action={
+                    <Badge tone={diagnosis.severity}>
+                      {
+                        t.status[
+                          diagnosis.status as "normal" | "warning" | "critical"
+                        ]
+                      }
+                    </Badge>
                   }
-                </Badge>
-              }
-            />
+                />
             {diagnosis.anomalies.length === 0 ? (
               <p className="mt-4 text-sm text-muted">
                 {t.dashboard.noAnomalies}
@@ -385,8 +420,18 @@ export default function DiagnosticsPage() {
               })}
             </div>
           </Card>
+            </>
+          ) : (
+            <Card>
+              <EmptyState
+                icon={Stethoscope}
+                title={t.equipment.noLastReading}
+                message=""
+              />
+            </Card>
+          )}
 
-          {/* EPISÓDIOS */}
+          {/* EPISÓDIOS — independentes do diagnóstico atual (retenção maior) */}
           <Card>
             <CardHeader
               eyebrow={t.diagnostics.episodes}
@@ -401,13 +446,17 @@ export default function DiagnosticsPage() {
             ) : (
               <div className="mt-4 space-y-3">
                 {episodes.map((episode) => (
-                  <EpisodeCard key={episode.id} episode={episode} />
+                  <EpisodeCard
+                    key={episode.id}
+                    episode={episode}
+                    equipmentId={equipmentId}
+                  />
                 ))}
               </div>
             )}
           </Card>
         </>
-      ) : null}
+      )}
     </div>
   );
 }

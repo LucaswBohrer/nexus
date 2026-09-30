@@ -26,7 +26,7 @@ import {
 } from "recharts";
 
 import {
-  getDiagnostics,
+  getEquipmentSummary,
   getEventsV1,
   getHistoryBuckets,
   getStatsSummary,
@@ -36,6 +36,7 @@ import {
   formatRelative,
   formatUptime,
 } from "../lib/format";
+import { useEquipment } from "../lib/equipment";
 import { usePreferences } from "../lib/preferences";
 import { useNow, usePoll } from "../lib/usePoll";
 import type {
@@ -48,9 +49,11 @@ import {
   Badge,
   Card,
   CardHeader,
+  EmptyState,
   ErrorBanner,
   LoadingState,
 } from "../components/ui";
+import { EquipmentContextLine } from "../components/EquipmentContext";
 
 type MetricKey =
   | "voltage"
@@ -208,17 +211,25 @@ function MetricCard({
   );
 }
 
-async function fetchActiveEvents(): Promise<V1Event[]> {
+async function fetchActiveEvents(
+  equipmentId: number | null
+): Promise<V1Event[]> {
   const [open, acknowledged] = await Promise.all([
-    getEventsV1({ status: "open", limit: 5 }),
-    getEventsV1({ status: "acknowledged", limit: 5 }),
+    getEventsV1({ status: "open", limit: 5, equipment_id: equipmentId }),
+    getEventsV1({
+      status: "acknowledged",
+      limit: 5,
+      equipment_id: equipmentId,
+    }),
   ]);
   return [...open.events, ...acknowledged.events]
     .sort((a, b) => b.id - a.id)
     .slice(0, 5);
 }
 
-async function fetchSparklines(): Promise<Record<string, HistoryBucket[]>> {
+async function fetchSparklines(
+  equipmentId: number | null
+): Promise<Record<string, HistoryBucket[]>> {
   const to = new Date();
   const from = new Date(to.getTime() - 3 * 3600_000);
   const metrics: HistoryMetric[] = [
@@ -236,6 +247,7 @@ async function fetchSparklines(): Promise<Record<string, HistoryBucket[]>> {
           from: from.toISOString(),
           to: to.toISOString(),
           bucket: "5m",
+          equipmentId,
         });
         return [metric, buckets] as const;
       } catch {
@@ -248,14 +260,38 @@ async function fetchSparklines(): Promise<Record<string, HistoryBucket[]>> {
 
 export default function DashboardPage() {
   const { t, preferences } = usePreferences();
+  const { equipmentId } = useEquipment();
   useNow(5000);
 
   const pollMs = preferences.pollingIntervalMs;
 
-  const summaryPoll = usePoll(getStatsSummary, pollMs, t.common.connectionError);
-  const diagPoll = usePoll(getDiagnostics, pollMs, t.common.connectionError);
-  const eventsPoll = usePoll(fetchActiveEvents, pollMs, t.common.connectionError);
-  const sparkPoll = usePoll(fetchSparklines, 60000, t.common.connectionError);
+  // Todas as consultas do dashboard são escopadas ao equipamento
+  // selecionado (contexto global). equipmentId é o resetKey: trocar de
+  // equipamento recarrega de imediato, sem esperar o próximo tick.
+  const summaryPoll = usePoll(
+    () => getStatsSummary(equipmentId),
+    pollMs,
+    t.common.connectionError,
+    equipmentId
+  );
+  const diagPoll = usePoll(
+    () => getEquipmentSummary(equipmentId ?? "DEFAULT"),
+    pollMs,
+    t.common.connectionError,
+    equipmentId
+  );
+  const eventsPoll = usePoll(
+    () => fetchActiveEvents(equipmentId),
+    pollMs,
+    t.common.connectionError,
+    equipmentId
+  );
+  const sparkPoll = usePoll(
+    () => fetchSparklines(equipmentId),
+    60000,
+    t.common.connectionError,
+    equipmentId
+  );
   const trendPoll = usePoll(
     () =>
       getHistoryBuckets({
@@ -263,9 +299,11 @@ export default function DashboardPage() {
         from: new Date(Date.now() - 3 * 3600_000).toISOString(),
         to: new Date().toISOString(),
         bucket: "5m",
+        equipmentId,
       }),
     60000,
-    t.common.connectionError
+    t.common.connectionError,
+    equipmentId
   );
 
   const defs = useMemo(() => metricDefs(t.dashboard), [t]);
@@ -278,8 +316,11 @@ export default function DashboardPage() {
   }, [defs, preferences.favoriteMetrics]);
 
   const summary = summaryPoll.data;
-  const diagnosis = diagPoll.data?.diagnosis;
-  const reading = diagPoll.data?.reading ?? summary?.current ?? null;
+  // Diagnóstico e leitura atual vêm do Equipment Summary (a API legada
+  // /api/monitoring/diagnostics não tem escopo por equipamento).
+  const diagnosis = diagPoll.data?.diagnosis ?? null;
+  const reading =
+    diagPoll.data?.last_reading ?? summary?.current ?? null;
   const events = eventsPoll.data ?? [];
   const trend = useMemo(
     () => trendPoll.data ?? [],
@@ -290,6 +331,11 @@ export default function DashboardPage() {
     summaryPoll.error ?? diagPoll.error ?? eventsPoll.error ?? null;
   const loading =
     (summaryPoll.loading || diagPoll.loading) && !summary && !diagnosis;
+
+  // Equipamento recém-criado ainda sem nenhuma leitura armazenada: o
+  // backend retorna current: null — mostramos um estado honesto em vez
+  // de quebrar os cards de métrica.
+  const hasReadings = summary !== null && summary.current !== null;
 
   // Comparação hora atual vs. hora anterior — calculada de verdade a
   // partir dos buckets (12 buckets de 5 min = 1 h). Só exibe se houver
@@ -323,6 +369,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-5">
+      <EquipmentContextLine />
       {error && (
         <ErrorBanner
           message={error}
@@ -408,21 +455,31 @@ export default function DashboardPage() {
           )}
 
           {/* MÉTRICAS */}
-          {summary && (
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {visibleDefs.map((def) => (
-                <MetricCard
-                  key={def.key}
-                  def={def}
-                  summary={summary}
-                  spark={
-                    def.sparkMetric
-                      ? (sparkPoll.data?.[def.sparkMetric] ?? [])
-                      : []
-                  }
-                />
-              ))}
-            </div>
+          {summary && !hasReadings ? (
+            <Card>
+              <EmptyState
+                icon={Gauge}
+                title={t.equipment.noLastReading}
+                message=""
+              />
+            </Card>
+          ) : (
+            summary && (
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                {visibleDefs.map((def) => (
+                  <MetricCard
+                    key={def.key}
+                    def={def}
+                    summary={summary}
+                    spark={
+                      def.sparkMetric
+                        ? (sparkPoll.data?.[def.sparkMetric] ?? [])
+                        : []
+                    }
+                  />
+                ))}
+              </div>
+            )
           )}
 
           {/* TENDÊNCIA AGREGADA */}

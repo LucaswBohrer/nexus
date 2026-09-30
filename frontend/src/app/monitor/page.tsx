@@ -23,6 +23,7 @@ import {
 } from "recharts";
 
 import { formatDateTime, formatNumber, formatTime } from "../../lib/format";
+import { useEquipment } from "../../lib/equipment";
 import { usePreferences } from "../../lib/preferences";
 import { useRealtimeReading } from "../../lib/useStream";
 import {
@@ -33,6 +34,7 @@ import {
   LoadingState,
   PageHeader,
 } from "../../components/ui";
+import { EquipmentContextLine } from "../../components/EquipmentContext";
 
 function LiveMetric({
   icon: Icon,
@@ -67,13 +69,14 @@ function LiveMetric({
 
 export default function MonitorPage() {
   const { t, preferences } = usePreferences();
+  const { equipmentId } = useEquipment();
   const {
     reading,
     transport,
     error,
     recent,
     loading,
-  } = useRealtimeReading(preferences.pollingIntervalMs, t.common.connectionError);
+  } = useRealtimeReading(preferences.pollingIntervalMs, t.common.connectionError, equipmentId);
 
   const status = reading?.status ?? "normal";
   const apparentPower =
@@ -81,6 +84,7 @@ export default function MonitorPage() {
 
   return (
     <div className="space-y-5">
+      <EquipmentContextLine />
       <PageHeader
         title={t.monitor.title}
         subtitle={t.monitor.subtitle}

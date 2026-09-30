@@ -15,6 +15,7 @@ import {
 
 import { getHistoryBuckets, getHistoryExtremes } from "../../lib/api";
 import { formatDateTime, formatNumber } from "../../lib/format";
+import { useEquipment } from "../../lib/equipment";
 import { usePreferences } from "../../lib/preferences";
 import type {
   HistoryBucket,
@@ -30,6 +31,7 @@ import {
   LoadingState,
   PageHeader,
 } from "../../components/ui";
+import { EquipmentContextLine } from "../../components/EquipmentContext";
 
 const RANGES = ["1h", "6h", "24h", "7d", "31d"] as const;
 type PresetRange = (typeof RANGES)[number];
@@ -123,6 +125,7 @@ type ChartPoint = {
 
 export default function HistoryPage() {
   const { t, preferences } = usePreferences();
+  const { equipmentId } = useEquipment();
 
   const [metric, setMetric] = useState<HistoryMetric>("active_power");
   const [range, setRange] = useState<Range>(
@@ -173,11 +176,13 @@ export default function HistoryPage() {
             from: b.from.toISOString(),
             to: b.to.toISOString(),
             bucket,
+            equipmentId,
           }),
           getHistoryExtremes({
             metric,
             from: b.from.toISOString(),
             to: b.to.toISOString(),
+            equipmentId,
           }),
         ]);
         if (!cancelled) {
@@ -202,7 +207,7 @@ export default function HistoryPage() {
     return () => {
       cancelled = true;
     };
-  }, [metric, range, bucket, customFrom, customTo, t]);
+  }, [metric, range, bucket, customFrom, customTo, equipmentId, t]);
 
   const points: ChartPoint[] = useMemo(() => {
     const spanMs =
@@ -231,6 +236,7 @@ export default function HistoryPage() {
 
   return (
     <div className="space-y-5">
+      <EquipmentContextLine />
       <PageHeader title={t.history.title} subtitle={t.history.subtitle} />
 
       <Card>

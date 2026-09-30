@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CalendarDays,
   Download,
@@ -16,6 +16,7 @@ import {
   type ReportKind,
 } from "../../lib/api";
 import { formatDateTime, formatNumber } from "../../lib/format";
+import { useEquipment } from "../../lib/equipment";
 import { usePreferences } from "../../lib/preferences";
 import { errorMessage } from "../../lib/usePoll";
 import type { ReportSummary } from "../../types/monitoring";
@@ -28,6 +29,7 @@ import {
   LoadingState,
   PageHeader,
 } from "../../components/ui";
+import { EquipmentContextLine } from "../../components/EquipmentContext";
 
 type PeriodType = "daily" | "weekly" | "custom";
 
@@ -56,6 +58,7 @@ function filenameSlug(value: string): string {
 
 export default function ReportsPage() {
   const { t, preferences } = usePreferences();
+  const { equipmentId, equipment } = useEquipment();
 
   const [periodType, setPeriodType] = useState<PeriodType>("daily");
   const [date, setDate] = useState(utcToday());
@@ -72,21 +75,32 @@ export default function ReportsPage() {
   const summaryKind: ReportKind =
     periodType === "custom" ? "summary" : periodType;
 
-  const summaryParams = useCallback((): Record<string, string> => {
-    if (periodType === "daily") return { date };
-    if (periodType === "weekly") return { week };
+  // Relatórios são escopados ao equipamento selecionado. Sem equipamento
+  // (contexto ainda carregando), params é null e o carregamento aguarda.
+  const summaryParams = useCallback((): Record<string, string> | null => {
+    if (equipmentId === null) {
+      return null;
+    }
+    const scoped = { equipment_id: String(equipmentId) };
+    if (periodType === "daily") return { date, ...scoped };
+    if (periodType === "weekly") return { week, ...scoped };
     return {
       from: new Date(customFrom).toISOString(),
       to: new Date(customTo).toISOString(),
+      ...scoped,
     };
-  }, [periodType, date, week, customFrom, customTo]);
+  }, [periodType, date, week, customFrom, customTo, equipmentId]);
 
   const load = useCallback(async () => {
+    const params = summaryParams();
+    if (!params) {
+      return;
+    }
     setLoading(true);
     setError(null);
     setData(null);
     try {
-      const summary = await getReportSummary(summaryKind, summaryParams());
+      const summary = await getReportSummary(summaryKind, params);
       setData(summary);
     } catch (err) {
       setError(errorMessage(err, t.reports.summaryError));
@@ -95,14 +109,19 @@ export default function ReportsPage() {
     }
   }, [summaryKind, summaryParams, t]);
 
-  // Carrega o resumo inicial (hoje).
+  // Carrega o resumo inicial e recarrega SOMENTE quando o equipamento
+  // muda (trocar data/semana exige o botão "Carregar resumo", como antes).
+  const prevEquipmentId = useRef<number | null>(null);
   useEffect(() => {
-    function initialLoad() {
-      void load();
+    if (equipmentId === null) {
+      return; // contexto ainda carregando
     }
-    initialLoad();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (prevEquipmentId.current === equipmentId) {
+      return;
+    }
+    prevEquipmentId.current = equipmentId;
+    void load();
+  }, [equipmentId, load]);
 
   const periodLabel =
     periodType === "daily"
@@ -130,33 +149,57 @@ export default function ReportsPage() {
   }
 
   const slug = data ? filenameSlug(data.period.from.slice(0, 10)) : "periodo";
-  const exportReadings = () =>
-    handleExport(
+  const equipmentSlug = equipment
+    ? filenameSlug(equipment.code)
+    : "equipamento";
+  const baseName = `nexus-${equipmentSlug}-${slug}`;
+
+  const exportReadings = () => {
+    const params = summaryParams();
+    if (!params) {
+      return;
+    }
+    void handleExport(
       "readings",
       summaryKind,
-      { ...summaryParams(), format: "csv" },
-      `nexus-readings-${slug}.csv`
+      { ...params, format: "csv" },
+      `${baseName}-readings.csv`
     );
-  const exportEvents = () =>
-    data &&
-    handleExport(
+  };
+  const exportEvents = () => {
+    if (!data || equipmentId === null) {
+      return;
+    }
+    void handleExport(
       "events",
       "events",
-      { from: data.period.from, to: data.period.to, format: "csv" },
-      `nexus-events-${slug}.csv`
+      {
+        from: data.period.from,
+        to: data.period.to,
+        format: "csv",
+        equipment_id: String(equipmentId),
+      },
+      `${baseName}-events.csv`
     );
-  const exportJson = () =>
-    handleExport(
+  };
+  const exportJson = () => {
+    const params = summaryParams();
+    if (!params) {
+      return;
+    }
+    void handleExport(
       "json",
       summaryKind,
-      { ...summaryParams(), format: "json" },
-      `nexus-summary-${slug}.json`
+      { ...params, format: "json" },
+      `${baseName}-summary.json`
     );
+  };
 
   const summary = data?.summary;
 
   return (
     <div className="space-y-5">
+      <EquipmentContextLine />
       <PageHeader title={t.reports.title} subtitle={t.reports.subtitle} />
 
       {exportError && <ErrorBanner message={exportError} />}
