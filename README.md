@@ -6,6 +6,32 @@ NEXUS is a full-stack platform for **simulating, monitoring and diagnosing elect
 
 ---
 
+## Estado atual — outubro/2026 (fase 2.4: multi-equipment)
+
+Capturas reais do dashboard rodando em modo de simulação (backend FastAPI na porta 8000, frontend Next.js na porta 3000). Telemetria ao vivo a 1 Hz, diagnósticos, análises agregadas, relatórios com exportação CSV/JSON e gestão de múltiplos equipamentos — tudo persistido em SQLite.
+
+![Dashboard do NEXUS — telemetria elétrica em tempo real](docs/screenshots/dashboard.png)
+
+**Dashboard** — tensão, corrente, potência ativa/aparente, temperatura e energia do dia, com tendência de potência (3h).
+
+![Monitor do NEXUS — telemetria em tempo real via SSE](docs/screenshots/monitor.png)
+
+**Monitor** — telemetria em tempo real (SSE, com fallback para polling): tensão, corrente, potências, fator de potência, frequência, temperatura e gráfico de potência ativa recente.
+
+![Análises do NEXUS — métricas agregadas do período](docs/screenshots/analises.png)
+
+**Análises** — energia no período, leituras, episódios, eventos por severidade/status e tabela de métricas (mín/máx/méd) por grandeza.
+
+![Relatórios do NEXUS — resumos e exportação](docs/screenshots/relatorios.png)
+
+**Relatórios** — resumo do período a partir de dados reais e exportação (CSV de leituras, CSV de eventos, resumo JSON).
+
+![Equipamentos do NEXUS — gestão multi-equipment](docs/screenshots/equipamentos.png)
+
+**Equipamentos** — registro multi-equipment (fase 2.4): cada leitura, evento, episódio e sessão de simulação é atribuída a um equipamento; todas as telas respeitam o equipamento selecionado.
+
+---
+
 ## The problem it solves
 
 Supervising electrical installations (voltage, current, power factor, temperature) normally requires physical meters, wiring and SCADA-style software. NEXUS provides a complete monitoring loop — acquisition, diagnostics, persistence, visualization — driven by a **configurable electrical simulator**, so monitoring logic, alerting and dashboards can be developed and demonstrated without any hardware.
